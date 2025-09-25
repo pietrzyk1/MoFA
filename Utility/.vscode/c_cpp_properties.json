@@ -1,0 +1,12 @@
+{
+  "configurations": [
+    {
+      "name": "WSL",
+      "includePath": ["${workspaceFolder}/include", "../../../MFEM/mfem-4.8"],
+      "compilerPath": "/usr/bin/g++",
+      "intelliSenseMode": "linux-gcc-x64",
+      "cppStandard": "c++17"
+    }
+  ],
+  "version": 4
+}

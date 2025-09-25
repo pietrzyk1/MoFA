@@ -1,0 +1,125 @@
+#lL.lH.
+#
+# Copyright (c) 2025, Lawrence Livermore National Security, LLC
+# and other MoFA project developers. All Rights reserved.
+# See files LICENSE and NOTICE for details. LLNL-CODE-2006961.
+#
+# This file is part of the MoFA Project. For more information
+# and source code availability visit https://github.com/pietrzyk1/MoFA.
+#
+# SPDX-License-Identifier: BSD-3-Clause
+#
+#lL.lH.
+
+##########
+# Staged #
+##########
+
+Utility/include/mfem_util_STAGED.h
+Utility/src/mfem_util_STAGED.cpp
+Input_File_Generator/include/generate_input_file_STAGED.h
+
+Machine_Learning_Tools/*
+
+Solvers/Cahn_Hilliard_Solver/*
+Solvers/Cahn_Hilliard_Closure_Solver/*
+Solvers/Upscaled_Cahn_Hilliard_Solver/*
+
+Solvers/Diffusion_Nonlinear_Reaction_Closure_Solver/*
+Solvers/Transport_Stokes_Closure_Solver/*
+Solvers/Upscaled_Diffusion_Nonlinear_Reaction_Solver/*
+
+Projects/Example_Project/config/*
+!Projects/Example_Project/config/.gitkeep
+
+scripts/bash_utility_functions_STAGED.sh
+
+
+
+######################
+# Pore-scale Solvers #
+######################
+
+# Stokes Solver
+Solvers/Stokes_Solver/bin/*
+!Solvers/Stokes_Solver/bin/.gitkeep
+Solvers/Stokes_Solver/build/*
+!Solvers/Stokes_Solver/build/.gitkeep
+
+# Transport Solver
+Solvers/Transport_Solver/bin/*
+!Solvers/Transport_Solver/bin/.gitkeep
+Solvers/Transport_Solver/build/*
+!Solvers/Transport_Solver/build/.gitkeep
+
+### Ready and waiting ###
+Solvers/Unsteady_Stokes_Solver/
+#Solvers/Unsteady_Stokes_Solver/bin/*
+#!Solvers/Unsteady_Stokes_Solver/bin/.gitkeep
+#Solvers/Unsteady_Stokes_Solver/build/*
+#!Solvers/Unsteady_Stokes_Solver/build/.gitkeep
+
+
+
+
+###########################
+# Closure Problem Solvers #
+###########################
+
+# Transport Closure Solver
+Solvers/Transport_Closure_Solver/bin/*
+!Solvers/Transport_Closure_Solver/bin/.gitkeep
+Solvers/Transport_Closure_Solver/build/*
+!Solvers/Transport_Closure_Solver/build/.gitkeep
+
+### Ready and waiting ###
+Solvers/Stokes_Closure_Solver/
+#Solvers/Stokes_Closure_Solver/bin/*
+#!Solvers/Stokes_Closure_Solver/bin/.gitkeep
+#Solvers/Stokes_Closure_Solver/build/*
+#!Solvers/Stokes_Closure_Solver/build/.gitkeep
+
+
+
+
+##########################
+# Upscaled Model Solvers #
+##########################
+
+# Upscaled Transport Solver
+Solvers/Upscaled_Solver_Scalar/bin/*
+!Solvers/Upscaled_Solver_Scalar/bin/.gitkeep
+Solvers/Upscaled_Solver_Scalar/build/*
+!Solvers/Upscaled_Solver_Scalar/build/.gitkeep
+
+# Upscaled Unsteady Stokes Solver
+Solvers/Upscaled_Unsteady_Stokes_Solver/
+#Solvers/Upscaled_Unsteady_Stokes_Solver/bin/*
+#!Solvers/Upscaled_Unsteady_Stokes_Solver/bin/.gitkeep
+#Solvers/Upscaled_Unsteady_Stokes_Solver/build/*
+#!Solvers/Upscaled_Unsteady_Stokes_Solver/build/.gitkeep
+
+
+
+
+#########
+# Other #
+#########
+
+# Input File Generator
+Input_File_Generator/bin/*
+!Input_File_Generator/bin/.gitkeep
+Input_File_Generator/build/*
+!Input_File_Generator/build/.gitkeep
+
+# Mesh Tools
+Mesh_Tools/bin/*
+!Mesh_Tools/bin/.gitkeep
+Mesh_Tools/build/*
+!Mesh_Tools/build/.gitkeep
+
+# Post Processing
+Post_Processing/Error_Calc/bin/*
+!Post_Processing/Error_Calc/bin/.gitkeep
+Post_Processing/Error_Calc/build/*
+!Post_Processing/Error_Calc/build/.gitkeep
