@@ -45,6 +45,13 @@ using namespace mfem;
 double inlet_BC_func(const Vector &p, int inlet_value_toggle);
 //void outlet_BC_func(const Vector &p, Vector &F);
 
+// Define a global "parameters struct" so that the BC functions can take in parameters
+struct Params
+{
+    vector<double> L = {1., 1., 0.};
+};
+static Params globalVars; 
+
 
 
 int main(int argc, char *argv[])
@@ -63,6 +70,8 @@ int main(int argc, char *argv[])
     
     int order = 2;
     int active_advection = 1;
+    vector<int> isPeriodic = {0, 0, 0};
+    int useInlet = 0;
     
     int active_AR = -1;
     int active_inlet = 0;
@@ -146,6 +155,8 @@ int main(int argc, char *argv[])
         sub_dict = *closure_dict["simulation parameters"];
         sub_dict.getValue("order", order);
         sub_dict.getValue("active advection", active_advection);
+        sub_dict.getValue("isPeriodic", isPeriodic);
+        sub_dict.getValue("use inlet", useInlet);
         
         sub_dict = *closure_dict["closure parameters"];
         sub_dict.getValue("active averaging region", active_AR);
@@ -213,6 +224,7 @@ int main(int argc, char *argv[])
     //   Get the mesh, the number of averaging regions, and the defined boundary attributes.
     // ===============================================================
     cout << "TCS:   Obtaining mesh and mesh info... ";
+
     // Use the provided mesh file to define the mesh 
     Mesh *mesh = new Mesh(mesh_file_path);
     //mesh->UniformRefinement(); // Refine the mesh once uniformly
@@ -223,6 +235,27 @@ int main(int argc, char *argv[])
     // Get the boundary attributes for the mesh (NOTE: the provided attribute tags are 1 more than the actual Array index used to assign essential boundary conditions (SEE BELOW))
     JSONDict mesh_info;
     mesh_info.loadFromFile(mesh_info_file_path);
+    globalVars.L = (*mesh_info["geometry"])["L"];
+
+    // Create a periodic mesh if required
+    Mesh periodic_mesh;
+    vector<Vector> translations = {};
+    Vector translation;
+    for (int i = 0; i < mesh->Dimension(); i++)
+    {
+        if (isPeriodic[i])
+        {
+            translation = Vector({0.0, 0.0, 0.0});
+            translation[i] = globalVars.L[i];
+            translations.push_back( translation );
+        }
+    }
+    if (translations.size() > 0)
+    {
+        periodic_mesh = Mesh::MakePeriodic(*mesh, mesh->CreatePeriodicVertexMapping(translations));
+        delete mesh;
+        mesh = &periodic_mesh;
+    }
 
     cout << "Complete." << endl;
     cout << "Number of averaging regions: " << N_AR << endl;
@@ -232,6 +265,7 @@ int main(int argc, char *argv[])
     //   Define finite element spaces for the concentration.
     // ===============================================================
     cout << "TCS:   Defining finite element spaces... ";
+
     // Finite element space for concentration
     FiniteElementCollection *fec_c = new H1_FECollection(order, mesh->Dimension());
     FiniteElementSpace *fespace_c = new FiniteElementSpace(mesh, fec_c, 1);
@@ -379,7 +413,7 @@ int main(int argc, char *argv[])
     // Here, we are defining two marker arrays to mark 1.) the inlet, and 2.) the outlet.
     Array<int> marker_inlet_BC(mesh->bdr_attributes.Max()); // Define a marker array for the inlet BC
     marker_inlet_BC = 0; // Initialize marker array to "don't apply any essential BC"
-    marker_inlet_BC[(int)(*mesh_info["scalar_closure"])["inlet1"] - 1] = 1; // Set the first bdr attr group (i.e., physical group defined as 1 in gmsh file) as being the inlet
+    if (useInlet == 1) { marker_inlet_BC[(int)(*mesh_info["scalar_closure"])["inlet1"] - 1] = 1; } // Set the first bdr attr group (i.e., physical group defined as 1 in gmsh file) as being the inlet
     int BC_toggle;
     if (active_inlet == 1 && forcing_function_file_name == "None") { BC_toggle = 1; } else { BC_toggle = 0; }
     FunctionCoefficient inlet_BC( [&](const Vector &x) -> double { return inlet_BC_func(x, BC_toggle); } ); // Define a function coefficient that will apply "inlet_BC_func", which varies in space
@@ -397,6 +431,7 @@ int main(int argc, char *argv[])
     //   Define block structure of the system.
     // ===============================================================
     cout << "TCS:   Defining the block system structure... ";
+
     // Notes: - This defines an array of offsets for each variable. The last component of the Array is the sum of the dimensions
     //          of each block.
     Array<int> block_offsets(3); // The argument should be the number of variables + 1
@@ -440,6 +475,7 @@ int main(int argc, char *argv[])
     //   Create the bilinear form for the diffusion term.
     // ===============================================================
     cout << "TCS:   Assembling bilinear forms and stiffness matrix... ";
+
     // Initiate the bilinear form of the diffusion term
     BilinearForm *varf_cdiff(new BilinearForm(fespace_c));
     ConstantCoefficient Diff_coef(omega);
@@ -452,9 +488,12 @@ int main(int argc, char *argv[])
     BC_projection.MakeRef(fespace_c, sol_BLK.GetBlock(0), block_offsets[0]);
     
     // Apply the inlet BC to the diffusion bilinear form
-    //BC_projection.ProjectCoefficient(inlet_BC);
-    BC_projection.ProjectBdrCoefficient(inlet_BC, marker_inlet_BC);
-    varf_cdiff->EliminateEssentialBC(marker_inlet_BC, BC_projection, b_BLK.GetBlock(0)); // Sets the rows in "varf_viscous" corresponding to DOFs marked by "marker_inlet_BC" to 0.0 and assigns a diagonal as 1.0. Then, for the same rows, sets the components of b_BLK to those of u_BC_apply.
+    if (useInlet == 1)
+    {
+        //BC_projection.ProjectCoefficient(inlet_BC);
+        BC_projection.ProjectBdrCoefficient(inlet_BC, marker_inlet_BC);
+        varf_cdiff->EliminateEssentialBC(marker_inlet_BC, BC_projection, b_BLK.GetBlock(0)); // Sets the rows in "varf_viscous" corresponding to DOFs marked by "marker_inlet_BC" to 0.0 and assigns a diagonal as 1.0. Then, for the same rows, sets the components of b_BLK to those of u_BC_apply.
+    }
     
     // Apply the outlet BC to the diffusion bilinear form
     //BC_projection.ProjectCoefficient(outlet_BC);
@@ -470,6 +509,7 @@ int main(int argc, char *argv[])
     //   Create the bilinear form for the averaging operator/forcing unknowns.
     // ===============================================================
     cout << "TCS:   Assembling averaging operator... ";
+
     // Notes: - We only create the bilinear form matrix for the averaging operator, because its transpose is identically
     //          the bilinear form of the forcing unknowns in the mass conservation equation.
     //
@@ -514,6 +554,7 @@ int main(int argc, char *argv[])
     //   Construct the preconditioner operator.
     // ===============================================================
     cout << "TCS:   Assembling the preconditioners... ";
+
     // Notes: - Here, we use Symmetric Gauss-Seidel to approximate the inverse of the "a" Schur complement.
     //
     //                      P = [ BM_cdiff      0    ] = [ BM_cdiff                 0                ]
@@ -522,33 +563,10 @@ int main(int argc, char *argv[])
     //    We use this ->      ~ [ BM_cdiff  0 ] = [ BM_cdiff                    0                   ]
     //                          [     0     S ]   [    0      BM_cavg diag(BM_cdiff)^(-1) BM_cavg_T ]
     //
-    // Initiate the preconditioner, solvers (used to obtain matrix inverses), and sparse matrices we will need
-    BlockDiagonalPreconditioner closurePC(block_offsets);
-    Solver *invBM_cdiff, *invS;
-    SparseMatrix *invBM_cdiff_BM_cavg_T = NULL, *S = NULL;
-
-    // Get the diagonal of BM_cdiff to approximate the application of its inverse onto BM_cavg_T
-    Vector BM_cdiff_diag(varf_cdiff->Height());
-    BM_cdiff.GetDiag(BM_cdiff_diag);
+    SaddlePointBlockPreconditioner closurePC(block_offsets);
+    if (is3D) { closurePC.BuildPreconditioner(BM_cdiff, BM_cavg, "DSmoother", "GSSmoother"); }
+    else { closurePC.BuildPreconditioner(BM_cdiff, BM_cavg, "BlockILU", "BlockILU"); }
     
-    // Approximate the application of BM_cdiff^(-1) on BM_cavg_T; then multiply by BM_cavg to complete our approximation of S
-    invBM_cdiff_BM_cavg_T = Transpose(BM_cavg);
-    for (int i = 0; i < BM_cdiff_diag.Size(); i++)
-    {
-        invBM_cdiff_BM_cavg_T->ScaleRow(i, 1./BM_cdiff_diag(i));
-    }
-    S = Mult(BM_cavg, *invBM_cdiff_BM_cavg_T);
-    
-    // Use smoother functions to define our approximate inverse matrices. Turn off their iterative modes
-    if (is3D) { invBM_cdiff = new DSmoother(BM_cdiff); invS = new GSSmoother(*S); }
-    else { invBM_cdiff = new BlockILU(BM_cdiff); invS = new BlockILU(*S); }
-    invBM_cdiff->iterative_mode = false;
-    invS->iterative_mode = false;
-    
-    // Finally build the diagonal preconditioners
-    closurePC.SetDiagonalBlock(0, invBM_cdiff);
-    closurePC.SetDiagonalBlock(1, invS);
-
     cout << "Complete." << endl;
     
 
@@ -696,16 +714,12 @@ int main(int argc, char *argv[])
     // ===============================================================
     // 17. Free the used memory.
     // ===============================================================
-    delete invBM_cdiff;
-    delete invS;
-    delete S;
     delete BM_cavg_T;
-    delete invBM_cdiff_BM_cavg_T;
     delete avgOp;
     delete varf_cdiff;
     // delete fespace_c; // Deleted with avgOp.
     delete fec_c;
-    delete mesh;
+    if (translations.size() == 0) { delete mesh; }
     
     return 0;
 }

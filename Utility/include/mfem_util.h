@@ -249,12 +249,12 @@ public:
     // Function for creating the saddle point problem block preconditioner.
     // Assume the system is [ A B^T ]
     //                      [ B  0  ]
-    void BuildPreconditioner(const SparseMatrix &A, const SparseMatrix &B);
+    void BuildPreconditioner(const SparseMatrix &A, const SparseMatrix &B, const string A_solver = "DSmoother", const string S_solver = "GSSmoother");
 
     // Function for creating the saddle point problem block preconditioner.
     // Assume the system is [ A B^T ]
     //                      [ B  D  ]
-    void BuildPreconditioner(const SparseMatrix &A, const SparseMatrix &B, const SparseMatrix &D);
+    void BuildPreconditioner(const SparseMatrix &A, const SparseMatrix &B, const SparseMatrix &D, const string A_solver = "DSmoother", const string S_solver = "GSSmoother");
 
     // Function for creating the Schur complement
     static SparseMatrix CreateSchurComplement(const SparseMatrix &A, const SparseMatrix &B);

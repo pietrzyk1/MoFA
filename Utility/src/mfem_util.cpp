@@ -243,14 +243,17 @@ void VectorDirichlettBC::EvalSpatiallyDependentFunction(Vector &V, ElementTransf
 // Function for creating the saddle point problem block preconditioner.
 // Assume the system is [ A B^T ]
 //                      [ B  0  ]
-void SaddlePointBlockPreconditioner::BuildPreconditioner(const SparseMatrix &A, const SparseMatrix &B)
+void SaddlePointBlockPreconditioner::BuildPreconditioner(const SparseMatrix &A, const SparseMatrix &B, const string A_solver, const string S_solver)
 {
     // Approximate the Schur complement of the matrix
     S = CreateSchurComplement(A, B);
-    
+
     // Use smoother functions to define our approximate inverse matrices. Turn off their iterative modes
-    invA = new DSmoother(A); //DSmoother(A);
-    invS = new GSSmoother(S); //GSSmoother(S);
+    if (A_solver == "BlockILU") { invA = new BlockILU(A); }
+    else { invA = new DSmoother(A); }
+    if (S_solver == "BlockILU") { invS = new BlockILU(S); }
+    else { invS = new GSSmoother(S); }
+    
     invA->iterative_mode = false;
     invS->iterative_mode = false;
     
@@ -259,14 +262,17 @@ void SaddlePointBlockPreconditioner::BuildPreconditioner(const SparseMatrix &A, 
     this->SetDiagonalBlock(1, invS);
 }
 
-void SaddlePointBlockPreconditioner::BuildPreconditioner(const SparseMatrix &A, const SparseMatrix &B, const SparseMatrix &D)
+void SaddlePointBlockPreconditioner::BuildPreconditioner(const SparseMatrix &A, const SparseMatrix &B, const SparseMatrix &D, const string A_solver, const string S_solver)
 {
     // Approximate the Schur complement of the matrix
     S = CreateSchurComplement(A, B, D);
     
     // Use smoother functions to define our approximate inverse matrices. Turn off their iterative modes
-    invA = new DSmoother(A); //DSmoother(A);
-    invS = new GSSmoother(S); //GSSmoother(S);
+    if (A_solver == "BlockILU") { invA = new BlockILU(A); }
+    else { invA = new DSmoother(A); }
+    if (S_solver == "BlockILU") { invS = new BlockILU(S); }
+    else { invS = new GSSmoother(S); }
+
     invA->iterative_mode = false;
     invS->iterative_mode = false;
     

@@ -57,6 +57,14 @@ std::vector<std::vector<std::vector<std::vector<double>>>> getVolumeCoords(int v
 // Here:
 //      vol_tag: a volume tag
 
+std::vector<double> getMinMaxLineCoords(int tag);
+// Here:
+//      tag: a line tag
+
+std::vector<double> getMinMaxSurfaceCoords(int tag);
+// Here:
+//      tag: a surface tag
+
 
 
 
@@ -139,15 +147,21 @@ bool isCoincidesSurface(const int srfc_tag, const int dim, const double test_val
 
 bool compareLineEndPoints(const std::vector<std::vector<double>> a, const std::vector<std::vector<double>> b, const double tol = tol_global);
 // Here:
-//      a: a vector of 2 vectors that contain 3 doubles: the x, y, and z coordinates of the line's end points.
-//      b: a vector of 2 vectors that contain 3 doubles: the x, y, and z coordinates of the line's end points.
+//      a: a vector of 2 vectors that contain 3 doubles: the x, y, and z coordinates of the line's end points
+//      b: a vector of 2 vectors that contain 3 doubles: the x, y, and z coordinates of the line's end points
 //      tol: the tolerance for double comparisons
 
 bool compareSurfaceEndPoints(const std::vector<std::vector<std::vector<double>>> a, const std::vector<std::vector<std::vector<double>>> b, const double tol = tol_global);
 // Here:
-//      a: a vector of multiple vectors of 2 vectors containing 3 doubles: the x, y, and z coordinates of the line's end points.
-//      b: a vector of multiple vectors of 2 vectors containing 3 doubles: the x, y, and z coordinates of the line's end points.
+//      a: a vector of multiple vectors of 2 vectors containing 3 doubles: the x, y, and z coordinates of the line's end points
+//      b: a vector of multiple vectors of 2 vectors containing 3 doubles: the x, y, and z coordinates of the line's end points
 //      tol: the tolerance for double comparisons
+
+bool areAdjacentEntities(const int entity_dim, const int A_tag, const int B_tag);
+// Here:
+//      entity_dim: the dimension of the geometric entities (i.e., 1 for lines, 2 for surfaces, 3 for volumes)
+//      A_tag: the tag of entity A
+//      B_tag: the tag of entity B
 
 
 
@@ -189,6 +203,17 @@ std::vector<int> makeLines(const std::vector<double> &x, const std::vector<doubl
 //      y: the y coordinates
 //      lines: an empty array that will be filled with the line numbers
 
+void load2DToolGeo(std::vector<std::pair<int, int>> &tool_sfs, std::vector<std::vector<std::vector<std::vector<double>>>> &tool_geo, const double geo_scale, const string geometry_file_path = "None");
+void load2DToolGeo(std::vector<std::pair<int, int>> &tool_sfs, std::vector<std::vector<std::vector<std::vector<double>>>> &tool_geo, const double geo_scale, const double x = 0.0, const double y = 0.0, const double z = 0.0);
+// Here:
+//      tool_sfs: a vector of pairs, where the first number in the pair is 2 (for surface; create load3DToolGeo for 3, volumes) and the second is the surface tag
+//      tool_geo: a nested vector of the coordinates of the relevant surface points. It has indices [surface, lines for those surfaces, points in those lines, coords of those points]
+//      geo_scale: the scale with which to scale the loaded/imported geometry
+//      x: the x-coordinate of the center of the default circle that is loaded by this function when no geometry file path is provided
+//      y: the y-coordinate of the center of the default circle that is loaded by this function when no geometry file path is provided
+//      z: the z-coordinate of the center of the default circle that is loaded by this function when no geometry file path is provided
+//      geometry_file_path: the file path to a tool geometry file
+
 
 
 
@@ -223,3 +248,38 @@ void MakeARMesh_Uniform3DRectangular(const int N_AR_x, const double &ell_x, cons
 //      L_z: the total length of the domain in the z-direction
 //      ARs_uc: an array that is filled by this function
 //      ARs_uc_geo: an array of the AR points that is filled by this function
+
+bool createMergedARGroups(const std::vector<std::pair<int, int>> &ARs,
+    double min_area_threshold, double max_AR_length, double max_AR_length_ratio,
+    std::vector<std::vector<int>> &AR_tags_toBeMerged, std::vector<double> &AR_pore_space_areas);
+// Here:
+//      ARs: a vector of surfaces that exist in the ARs after the cut. They have the form {{dim, tag}, ...}
+//      min_area_threshold: the minimum allowable AR area
+//      max_AR_length: the maximum allowable edge length of an AR
+//      max_AR_length_ratio: the maximum allowable ratio between AR edge lengths (i.e., how long vs. how wide an AR is)
+//      AR_tags_toBeMerged: a vector of the vectors of AR tags to be merged (i.e., {{1}, {2,3}, {4,6}, {5}, ...})
+//      AR_pore_space_areas: a vector of the merged AR areas
+
+
+
+
+
+void separateARandGeometrySurfaceLines(const std::vector<std::pair<int, int>> &ARs,
+    const std::vector<std::vector<std::vector<std::vector<double>>>> &tool_geo,
+    std::vector<std::vector<std::pair<int, int>>> &ARs_lns,
+    std::vector<std::vector<std::pair<int, int>>> &tool_sfs_lns);
+// Here:
+//      ARs: a vector of surfaces that exist in the ARs after the cut. They have the form {{dim, tag}, ...}
+//      tool_geo: a nested vector of the coordinates of the cut surface points. It has indices [surface, lines for those surfaces, points in those lines, coords of those points]
+//      ARs_lns: a nested vector of: first level = AR, second level = AR boundary lines, and then the pair is {dim tag}... I think...
+//      tool_sfs_lns: a nested vector of: first level = tool surfaces, second level = surface lines, and then the pair is {dim tag}... I think...
+
+void separateARandGeometryVolumeSurfaces(const std::vector<std::pair<int, int>> &ARs,
+    const std::vector<std::vector<std::vector<std::vector<std::vector<double>>>>> &tool_geo_3D,
+    std::vector<std::vector<std::pair<int, int>>> &ARs_srfcs,
+    std::vector<std::vector<std::pair<int, int>>> &tool_vol_srfcs);
+// Here:
+//      ARs: a vector of surfaces that exist in the ARs after the cut. They have the form {{dim, tag}, ...}
+//      tool_geo_3D: a nested vector of the coordinates of the cut volume points. It has indices [volume, surfaces for those volumes, lines for those surfaces, points in those lines, coords of those points]
+//      ARs_srfcs: a nested vector of: first level = AR, second level = AR boundary surfaces, and then the pair is {dim, tag}... I think...
+//      tool_vol_srfcs: a nested vector of: first level = tool volumes, second level = volume surfaces, and then the pair is {dim, tag}... I think...

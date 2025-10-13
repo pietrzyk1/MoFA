@@ -18,8 +18,8 @@ import code
 def main():
 
     # Provide the SVG directory and file name
-    geometry_dir = '../../Meshes/data/Cylinders/'
-    geometry_file_name_prefix = 'Cylinders'
+    geometry_dir = '../../../Meshes/data/Single_Cylinder/11x1_D0p5/'
+    geometry_file_name_prefix = 'Single_Cylinder'
     geometry_file_name_suffix = '.svg'
 
     # Provide the save file directory and file name
@@ -29,7 +29,7 @@ def main():
     
 
     svgReader = SVGReader(geometry_dir + geometry_file_name_prefix + geometry_file_name_suffix)
-    geometry_points = svgReader.GetPointsFromFile()
+    geometry_points = svgReader.GetPointsFromFile() # Format is geometry_points[surface][x or y][coord data]
 
     with open(save_dir + save_file_name_prefix + save_file_name_suffix, 'w') as file:
         file.write('{\n')

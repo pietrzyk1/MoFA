@@ -98,6 +98,11 @@ int main(int argc, char **argv)
     double max_elem_size = 0.25 * geo_scale;
     double min_elem_size = 0.025 * geo_scale;
 
+    int merge_ARs = 0;
+    double min_area_threshold = 0.2;
+    double max_AR_length = 1.75;
+    double max_AR_length_ratio = 2.0;
+    
     string output_dir = "./";
     string output_file_name = "mesh.msh";
     string mesh_info_dir = "./";
@@ -147,6 +152,11 @@ int main(int argc, char **argv)
         
 
         sub_dict = *mesh_dict["AR"];
+        
+        sub_dict.getValue("merge ARs", merge_ARs);
+        sub_dict.getValue("min area threshold", min_area_threshold);
+        sub_dict.getValue("max AR length", max_AR_length);
+        sub_dict.getValue("max AR length ratio", max_AR_length_ratio);
         
         JSONDict subsub_dict = *sub_dict["N_AR"];
         subsub_dict.getValue("x", N_AR_x);
@@ -207,10 +217,10 @@ int main(int argc, char **argv)
     // Define averaging regions
     // ========================================
     std::vector<std::pair<int, int>> ARs_uc; // Format is {dimension of entity, integer tag of entity}.
-    std::vector<std::pair<int, int>> tool_sfs;
-    std::vector<std::pair<int, int>> tool_vols;
-    std::vector<std::vector<std::vector<std::vector<double>>>> ARs_uc_geo;
-    std::vector<std::vector<std::vector<std::vector<std::vector<double>>>>> ARs_uc_geo_3D;
+    std::vector<std::pair<int, int>> tool_sfs; // For 2D
+    std::vector<std::pair<int, int>> tool_vols; // For 3D
+    std::vector<std::vector<std::vector<std::vector<double>>>> ARs_uc_geo; // For 2D
+    std::vector<std::vector<std::vector<std::vector<std::vector<double>>>>> ARs_uc_geo_3D; // For 3D
 
     if (is3D) { MakeARMesh_Uniform3DRectangular(N_AR_x, ell_x, L_x, N_AR_y, ell_y, L_y, N_AR_z, ell_z, L_z, ARs_uc, ARs_uc_geo_3D); }
     else { MakeARMesh_Uniform2DRectangular(N_AR_x, ell_x, L_x, N_AR_y, ell_y, L_y, ARs_uc, ARs_uc_geo); }
@@ -236,7 +246,7 @@ int main(int argc, char **argv)
             
             int cut_geo2 = gmsh::model::occ::addBox(ell_x*2.1, -ell_y/3, -ell_z * 2/3, ell_x*1.8, ell_y/3, ell_z/2);
             gmsh::model::occ::synchronize();
-            tool_vols.push_back({3, cut_geo2});
+            tool_vols.push_back({3, cut_geo2}); 
             tool_geo_3D.push_back( getVolumeCoords(cut_geo2) );
             
             // Cut the averaging regions with the geometry
@@ -244,14 +254,9 @@ int main(int argc, char **argv)
         }
         else
         {
-            //int cut_geo = createCircle(-ell_x/2, 0.0, 0.0, 0.3 * geo_scale, 0.05 * geo_scale);
-            std::vector<int> cut_geo = getCutSurfaceFromFile(geometry_file_path, geo_scale);
-            gmsh::model::occ::synchronize();
-            for (int i_surf = 0; i_surf < cut_geo.size(); i_surf++)
-            {
-                tool_sfs.push_back({2, cut_geo[i_surf]});
-                tool_geo.push_back( getSurfaceCoords(cut_geo[i_surf]) );
-            }
+            // Load the cut geometry
+            //load2DToolGeo(tool_sfs, tool_geo, geo_scale, -ell_x/2, 0.0, 0.0);
+            load2DToolGeo(tool_sfs, tool_geo, geo_scale, geometry_file_path);
             
             // Cut the averaging regions with the geometry
             gmsh::model::occ::cut(ARs_uc, tool_sfs, ARs, mapOut);
@@ -259,17 +264,10 @@ int main(int argc, char **argv)
     }
     else
     {
-        if (is3D)
-        {
-            gmsh::model::occ::fragment(ARs_uc, tool_vols, ARs, mapOut);
-        }
-        else
-        {
-            gmsh::model::occ::fragment(ARs_uc, tool_sfs, ARs, mapOut);
-        }
+        if (is3D) { gmsh::model::occ::fragment(ARs_uc, tool_vols, ARs, mapOut); }
+        else { gmsh::model::occ::fragment(ARs_uc, tool_sfs, ARs, mapOut); }
     }
     
-
     // ========================================
     // Synchronize the model
     // ========================================
@@ -279,107 +277,13 @@ int main(int argc, char **argv)
     // ========================================
     // Re-obtain the geometry curves
     // ========================================
-    std::vector<std::vector<std::vector<double>>> AR_c_geo;
     std::vector<std::vector<std::pair<int, int>>> tool_sfs_lns(tool_geo.size());
-    std::vector<std::vector<std::pair<int, int>>> ARs_lns(ARs.size());
-    std::vector<std::pair<int, int>> AR_all_lns;
-    bool isGeoLine;
-    int sf_ind;
-    
-    std::vector<std::vector<std::vector<std::vector<double>>>> AR_c_geo_3D;
     std::vector<std::vector<std::pair<int, int>>> tool_vol_srfcs(tool_geo_3D.size());
+    std::vector<std::vector<std::pair<int, int>>> ARs_lns(ARs.size());
     std::vector<std::vector<std::pair<int, int>>> ARs_srfcs(ARs.size());
-    std::vector<std::pair<int, int>> AR_all_srfcs;
-    bool isGeoSurface;
-    int vol_ind;
-    
 
-    if (is3D)
-    {
-        // Get the boundaries of the geometry in each AR after the cut
-        for (int i_ar = 0; i_ar < ARs.size(); i_ar++)
-        {
-            // Get the surface tags for the AR after the cut
-            assert (ARs[i_ar].first == 3);
-            gmsh::model::getBoundary({ARs[i_ar]}, AR_all_srfcs, false, false, false);
-            
-            // Get the geometry for the AR after the cut
-            AR_c_geo_3D = getVolumeCoords(ARs[i_ar].second);
-
-            // Look through and see if any of the surfaces match the previous geo surfaces
-            for (int i_srfc_c = 0; i_srfc_c < AR_c_geo_3D.size(); i_srfc_c++)
-            {
-                isGeoSurface = false;
-                for (int i_vol_uc = 0; i_vol_uc < tool_geo_3D.size(); i_vol_uc++) // Looking through the uncut geo volumes
-                {
-                    for (int i_srfc_uc = 0; i_srfc_uc < tool_geo_3D[i_vol_uc].size(); i_srfc_uc++) // Looking through the uncut geo surfaces
-                    {
-                        // See if the surfaces from the cut geometry and uncut geometry are parallel and share a corner point. If so, it is likely that they are/from the same surface
-                        if (areParallel(AR_c_geo_3D[i_srfc_c], tool_geo_3D[i_vol_uc][i_srfc_uc]) && compareSurfaceEndPoints(AR_c_geo_3D[i_srfc_c], tool_geo_3D[i_vol_uc][i_srfc_uc]))
-                        {
-                            isGeoSurface = true;
-                            vol_ind = i_vol_uc;
-                            break;
-                        }
-                    }
-                    if (isGeoSurface) { break; }
-                }
-
-                // If the cut geo surface did compare to the uncut geo surface, save it
-                if (isGeoSurface)
-                {
-                    tool_vol_srfcs[vol_ind].push_back(AR_all_srfcs[i_srfc_c]); // NOTE: tool_vol_srfcs retains the same volumes as tool_geo. There may be more surfaces in each volume though
-                }
-                else
-                {
-                    ARs_srfcs[i_ar].push_back(AR_all_srfcs[i_srfc_c]); // Assuming that the remainder surfaces are the AR boundaries
-                }
-            }
-        }
-    }
-    else
-    {
-        // Get the boundaries of the geometry in each AR after the cut
-        for (int i_ar = 0; i_ar < ARs.size(); i_ar++)
-        {
-            // Get the line tags for the AR after the cut
-            assert (ARs[i_ar].first == 2);
-            gmsh::model::getBoundary({ARs[i_ar]}, AR_all_lns, false, false, false);
-            
-            // Get the geometry for the AR after the cut
-            AR_c_geo = getSurfaceCoords(ARs[i_ar].second);
-
-            // Look through and see if any of the lines match the previous geo lines
-            for (int i_ln_c = 0; i_ln_c < AR_c_geo.size(); i_ln_c++)
-            {
-                isGeoLine = false;
-                for (int i_sf_uc = 0; i_sf_uc < tool_geo.size(); i_sf_uc++) // Looking through the uncut geo surfaces
-                {
-                    for (int i_ln_uc = 0; i_ln_uc < tool_geo[i_sf_uc].size(); i_ln_uc++) // Looking through the uncut geo lines
-                    {
-                        // See if the lines from the cut geometry and uncut geometry are parallel and share an end point. If so, it is likely that they are/from the same line
-                        if (areParallel(AR_c_geo[i_ln_c], tool_geo[i_sf_uc][i_ln_uc]) && compareLineEndPoints(AR_c_geo[i_ln_c], tool_geo[i_sf_uc][i_ln_uc]))
-                        {
-                            isGeoLine = true;
-                            sf_ind = i_sf_uc;
-                            break;
-                        }
-                    }
-                    if (isGeoLine) { break; }
-                }
-
-                // If the cut geo line did compare to the uncut geo line, save it
-                if (isGeoLine)
-                {
-                    tool_sfs_lns[sf_ind].push_back(AR_all_lns[i_ln_c]); // NOTE: tool_sfs_lns retains the same surfaces as tool_geo. There may be more lines in each surface though
-                }
-                else
-                {
-                    ARs_lns[i_ar].push_back(AR_all_lns[i_ln_c]); // Assuming that the remainder lines are the AR boundaries
-                }
-            }
-        }
-    }
+    if (is3D) { separateARandGeometryVolumeSurfaces(ARs, tool_geo_3D, ARs_srfcs, tool_vol_srfcs); }
+    else { separateARandGeometrySurfaceLines(ARs, tool_geo, ARs_lns, tool_sfs_lns); }
     
 
     // ========================================
@@ -389,7 +293,9 @@ int main(int argc, char **argv)
     // ========================================
     std::vector<int> AR_tags, inlet_ln_tags, outlet_ln_tags, no_slip_ln_tags, top_ln_tags, bottom_ln_tags, left_ln_tags, right_ln_tags, unused_ln_tags;
     int inlet_tag, outlet_tag, no_slip_tag, unused_tag;
-
+    bool anything_Merged = false;
+    std::vector<double> AR_pore_space_areas;
+        
 
     
     if (is3D)
@@ -487,7 +393,7 @@ int main(int argc, char **argv)
             if (verbose) { std::cout << "occ::cut created entity: dim = " << dim << ", tag = " << tag << std::endl; }
             
             // Create a physical group from the AR
-            AR_tags.push_back( gmsh::model::addPhysicalGroup(dim, {tag}) );
+            //AR_tags.push_back( gmsh::model::addPhysicalGroup(dim, {tag}) );
             
             for (int i_ln = 0; i_ln < ARs_lns[i_ar].size(); i_ln++)
             {
@@ -552,17 +458,6 @@ int main(int argc, char **argv)
         used_tag = getPhysicalGroup(outlet_tag, outletSide, 1, top_ln_tags, right_ln_tags, bottom_ln_tags, left_ln_tags);
         used_tags.push_back( used_tag );
 
-        //if (isPeriodic[0] == 1)
-        //{
-        //    for (int i = 0; i < used_tags.size(); i++) { assert (used_tags[i] != 2 && used_tags[i] != 4); }
-        //    used_tags.push_back( 2 ); used_tags.push_back( 4 );
-        //}
-        //if (isPeriodic[1] == 1)
-        //{
-        //    for (int i = 0; i < used_tags.size(); i++) { assert (used_tags[i] != 1 && used_tags[i] != 3); }
-        //    used_tags.push_back( 1 ); used_tags.push_back( 3 );
-        //}
-
         for (int i = 1; i <= 4; i++)
         {
             used_tag = 0;
@@ -582,34 +477,33 @@ int main(int argc, char **argv)
         no_slip_tag = gmsh::model::addPhysicalGroup(1, no_slip_ln_tags);
         unused_tag = gmsh::model::addPhysicalGroup(1, unused_ln_tags);
 
-        /*
-        if (false) // Classic, horizontal configuration
-        {
-            inlet_tag = gmsh::model::addPhysicalGroup(1, left_ln_tags);
-            outlet_tag = gmsh::model::addPhysicalGroup(1, right_ln_tags);
 
-            no_slip_ln_tags.insert(no_slip_ln_tags.end(), top_ln_tags.begin(), top_ln_tags.end());
-            no_slip_ln_tags.insert(no_slip_ln_tags.end(), bottom_ln_tags.begin(), bottom_ln_tags.end());
-            no_slip_tag = gmsh::model::addPhysicalGroup(1, no_slip_ln_tags);
-            
-            unused_tag = gmsh::model::addPhysicalGroup(1, unused_ln_tags);
-        }
-        else // Testing vertical configuration
-        {
-            inlet_tag = gmsh::model::addPhysicalGroup(1, bottom_ln_tags);
-            outlet_tag = gmsh::model::addPhysicalGroup(1, top_ln_tags);
 
-            no_slip_ln_tags.insert(no_slip_ln_tags.end(), left_ln_tags.begin(), left_ln_tags.end());
-            no_slip_ln_tags.insert(no_slip_ln_tags.end(), right_ln_tags.begin(), right_ln_tags.end());
-            no_slip_tag = gmsh::model::addPhysicalGroup(1, no_slip_ln_tags);
+        // ========================================
+        // Merge the small AR pore spaces with others (If things are merged, do not use AR average; use pore-space average in simulations) 
+        // ========================================
+        if (merge_ARs == 1)
+        {
+            std::vector<std::vector<int>> AR_tags_toBeMerged; // The inner list is {merge host tag (i.e., the big AR), merging tag (i.e., the smoll AR)}
+            anything_Merged = createMergedARGroups(ARs, min_area_threshold, max_AR_length, max_AR_length_ratio, AR_tags_toBeMerged, AR_pore_space_areas);
             
-            unused_tag = gmsh::model::addPhysicalGroup(1, unused_ln_tags);
+            // Create a physical group from the AR
+            for (int i = 0; i < AR_tags_toBeMerged.size(); i++)
+            {
+                AR_tags.push_back( gmsh::model::addPhysicalGroup(2, AR_tags_toBeMerged[i]) );
+            }
         }
-        */
-        //inlet_tag = gmsh::model::addPhysicalGroup(1, inlet_ln_tags);
-        //outlet_tag = gmsh::model::addPhysicalGroup(1, outlet_ln_tags);
-        //no_slip_tag = gmsh::model::addPhysicalGroup(1, no_slip_ln_tags);
-        //unused_tag = gmsh::model::addPhysicalGroup(1, unused_ln_tags);
+        else
+        {
+            // Create physical groups for ARs
+            for (int i_ar = 0; i_ar < ARs.size(); i_ar++)
+            {
+                // Get AR information
+                int dim = ARs[i_ar].first;
+                int tag = ARs[i_ar].second;
+                AR_tags.push_back( gmsh::model::addPhysicalGroup(dim, {tag}) );
+            }
+        }
 
     }
     
@@ -632,25 +526,13 @@ int main(int argc, char **argv)
     {
         if (isPeriodic[0] == 1)
         {
-            for (int i = 0; i < left_ln_tags.size(); i++)
-            {
-                gmsh::model::geo::mesh::setTransfiniteCurve(left_ln_tags[i], (int)(ell_y/min_elem_size));
-            }
-            for (int i = 0; i < right_ln_tags.size(); i++)
-            {
-                gmsh::model::geo::mesh::setTransfiniteCurve(right_ln_tags[i], (int)(ell_y/min_elem_size));
-            }
+            for (int i = 0; i < left_ln_tags.size(); i++) { gmsh::model::geo::mesh::setTransfiniteCurve(left_ln_tags[i], (int)(ell_y/min_elem_size)); }
+            for (int i = 0; i < right_ln_tags.size(); i++) { gmsh::model::geo::mesh::setTransfiniteCurve(right_ln_tags[i], (int)(ell_y/min_elem_size)); }
         }
         if (isPeriodic[1] == 1)
         {
-            for (int i = 0; i < bottom_ln_tags.size(); i++)
-            {
-                gmsh::model::geo::mesh::setTransfiniteCurve(bottom_ln_tags[i], (int)(L_x/min_elem_size));
-            }
-            for (int i = 0; i < top_ln_tags.size(); i++)
-            {
-                gmsh::model::geo::mesh::setTransfiniteCurve(top_ln_tags[i], (int)(L_x/min_elem_size));
-            }
+            for (int i = 0; i < bottom_ln_tags.size(); i++) { gmsh::model::geo::mesh::setTransfiniteCurve(bottom_ln_tags[i], (int)(L_x/min_elem_size)); }
+            for (int i = 0; i < top_ln_tags.size(); i++) { gmsh::model::geo::mesh::setTransfiniteCurve(top_ln_tags[i], (int)(L_x/min_elem_size)); }
         }
         gmsh::model::geo::synchronize();
     }
@@ -667,10 +549,14 @@ int main(int argc, char **argv)
     // Create the AR sub-dictionary
     AR_dict["total_number"] = (int)AR_tags.size();
     AR_dict["tags"] = AR_tags; // The AR tags are not actually used yet. Maybe in the future.
-    vector<double> AR_areas;
-    if (is3D) { for (int i_ar = 0; i_ar < AR_tags.size(); i_ar++) { AR_areas.push_back( (double)(ell_x*ell_y*ell_z) ); } }
-    else { for (int i_ar = 0; i_ar < AR_tags.size(); i_ar++) { AR_areas.push_back( (double)(ell_x*ell_y) ); } }
-    AR_dict["total_areas"] = AR_areas;
+    if (anything_Merged) { AR_dict["total_areas"] = AR_pore_space_areas; }
+    else
+    {
+        vector<double> AR_areas;
+        if (is3D) { for (int i_ar = 0; i_ar < AR_tags.size(); i_ar++) { AR_areas.push_back( (double)(ell_x*ell_y*ell_z) ); } }
+        else { for (int i_ar = 0; i_ar < AR_tags.size(); i_ar++) { AR_areas.push_back( (double)(ell_x*ell_y) ); } }
+        AR_dict["total_areas"] = AR_areas;
+    }
     bdr_tag_file_new["AR"] = &AR_dict;
     
     // Create the Stokes sub-dictionary (containing tags for BCs in the Stokes problem)

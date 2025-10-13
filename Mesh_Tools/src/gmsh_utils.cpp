@@ -19,6 +19,8 @@ lL.lH.*/
 
 
 
+
+
 // ========================================
 // Functions for getting point coordinates of different geometric entities
 // ========================================  
@@ -77,6 +79,55 @@ std::vector<std::vector<std::vector<std::vector<double>>>> getVolumeCoords(int v
     }
 
     return vol_srfc_ln_pts_coords;
+}
+
+// Define a function that takes in a line tag and returns the minimum/maximum x/y coordinates of the line's boundary points.
+std::vector<double> getMinMaxLineCoords(int tag)
+{
+    std::vector<double> min_max_x_y = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0}; // min x, max x, min y, max y, min z, max z ---> min_max_x_y[0], min_max_x_y[1], min_max_x_y[2], min_max_x_y[3], min_max_x_y[4], min_max_x_y[5] 
+    std::vector<std::vector<double>> coords = getLineCoords(tag);
+    for (int i_pt = 0; i_pt < coords.size(); i_pt++)
+    {
+        if (i_pt == 0)
+        {
+            min_max_x_y[0] = coords[i_pt][0]; min_max_x_y[1] = coords[i_pt][0];
+            min_max_x_y[2] = coords[i_pt][1]; min_max_x_y[3] = coords[i_pt][1];
+            min_max_x_y[4] = coords[i_pt][2]; min_max_x_y[5] = coords[i_pt][2];
+        }
+        if (coords[i_pt][0] < min_max_x_y[0]) { min_max_x_y[0] = coords[i_pt][0]; }
+        else if (coords[i_pt][0] > min_max_x_y[1]) { min_max_x_y[1] = coords[i_pt][0]; }
+        if (coords[i_pt][1] < min_max_x_y[2]) { min_max_x_y[2] = coords[i_pt][1]; }
+        else if (coords[i_pt][1] > min_max_x_y[3]) { min_max_x_y[3] = coords[i_pt][1]; }
+        if (coords[i_pt][2] < min_max_x_y[4]) { min_max_x_y[4] = coords[i_pt][2]; }
+        else if (coords[i_pt][2] > min_max_x_y[5]) { min_max_x_y[5] = coords[i_pt][2]; }
+    }
+    return min_max_x_y;
+}
+
+// Define a function that takes in a surface tag and returns the minimum/maximum x/y coordinates of the surface's boundary points.
+std::vector<double> getMinMaxSurfaceCoords(int tag)
+{
+    std::vector<double> min_max_x_y = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0}; // min x, max x, min y, max y, min z, max z ---> min_max_x_y[0], min_max_x_y[1], min_max_x_y[2], min_max_x_y[3], min_max_x_y[4], min_max_x_y[5] 
+    std::vector<std::vector<std::vector<double>>> coords = getSurfaceCoords(tag);
+    for (int i_ln = 0; i_ln < coords.size(); i_ln++)
+    {
+        for (int i_pt = 0; i_pt < coords[i_ln].size(); i_pt++)
+        {
+            if (i_ln == 0 && i_pt == 0)
+            {
+                min_max_x_y[0] = coords[i_ln][i_pt][0]; min_max_x_y[1] = coords[i_ln][i_pt][0];
+                min_max_x_y[2] = coords[i_ln][i_pt][1]; min_max_x_y[3] = coords[i_ln][i_pt][1];
+                min_max_x_y[4] = coords[i_ln][i_pt][2]; min_max_x_y[5] = coords[i_ln][i_pt][2];
+            }
+            if (coords[i_ln][i_pt][0] < min_max_x_y[0]) { min_max_x_y[0] = coords[i_ln][i_pt][0]; }
+            else if (coords[i_ln][i_pt][0] > min_max_x_y[1]) { min_max_x_y[1] = coords[i_ln][i_pt][0]; }
+            if (coords[i_ln][i_pt][1] < min_max_x_y[2]) { min_max_x_y[2] = coords[i_ln][i_pt][1]; }
+            else if (coords[i_ln][i_pt][1] > min_max_x_y[3]) { min_max_x_y[3] = coords[i_ln][i_pt][1]; }
+            if (coords[i_ln][i_pt][2] < min_max_x_y[4]) { min_max_x_y[4] = coords[i_ln][i_pt][2]; }
+            else if (coords[i_ln][i_pt][2] > min_max_x_y[5]) { min_max_x_y[5] = coords[i_ln][i_pt][2]; }
+        }
+    }
+    return min_max_x_y;
 }
 
 
@@ -325,6 +376,28 @@ bool compareSurfaceEndPoints(const std::vector<std::vector<std::vector<double>>>
     return false;
 }
 
+bool areAdjacentEntities(const int entity_dim, const int A_tag, const int B_tag)
+{
+    // Get the boundary entities for each provided entity
+    std::vector<std::pair<int, int>> A_boundaries, B_boundaries;
+    gmsh::model::getBoundary({{entity_dim, A_tag}}, A_boundaries, false, false, false);
+    gmsh::model::getBoundary({{entity_dim, B_tag}}, B_boundaries, false, false, false);
+    
+    // Get the boundary tags
+    std::vector<int> A_boundary_tags; for (int i = 0; i < A_boundaries.size(); i++) { A_boundary_tags.push_back( A_boundaries[i].second ); }
+    std::vector<int> B_boundary_tags; for (int i = 0; i < B_boundaries.size(); i++) { B_boundary_tags.push_back( B_boundaries[i].second ); }
+
+    // Compare the boundary tags
+    for (int i = 0; i < A_boundary_tags.size(); i++)
+    {
+        for (int j = 0; j < B_boundary_tags.size(); j++)
+        {
+            if (A_boundary_tags[i] == B_boundary_tags[j]) { return true; }
+        }
+    }
+    return false;
+}
+
 
 
 
@@ -351,8 +424,9 @@ int getPhysicalGroup(int &physGroupTag, const string side, const int dim, std::v
 
 
 
+
 // ========================================
-// Functions for simplistic geometry creation
+// Functions for creating simple geometries
 // ========================================  
 
 // Define a function for making a circle from lines
@@ -441,12 +515,38 @@ std::vector<int> makeLines(const std::vector<double> &x, const std::vector<doubl
     return lines;
 }
 
+void load2DToolGeo(std::vector<std::pair<int, int>> &tool_sfs, std::vector<std::vector<std::vector<std::vector<double>>>> &tool_geo, const double geo_scale, const string geometry_file_path)
+{
+    std::vector<int> cut_geo = getCutSurfaceFromFile(geometry_file_path, geo_scale);
+
+    gmsh::model::occ::synchronize();
+    
+    for (int i_surf = 0; i_surf < cut_geo.size(); i_surf++)
+    {
+        tool_sfs.push_back({2, cut_geo[i_surf]});
+        tool_geo.push_back( getSurfaceCoords(cut_geo[i_surf]) );
+    }
+}
+void load2DToolGeo(std::vector<std::pair<int, int>> &tool_sfs, std::vector<std::vector<std::vector<std::vector<double>>>> &tool_geo, const double geo_scale, const double x, const double y, const double z)
+{
+    std::vector<int> cut_geo;
+    cut_geo.push_back( createCircle(x, y, z, 0.3 * geo_scale, 0.05 * geo_scale) );
+    
+    gmsh::model::occ::synchronize();
+    
+    for (int i_surf = 0; i_surf < cut_geo.size(); i_surf++)
+    {
+        tool_sfs.push_back({2, cut_geo[i_surf]});
+        tool_geo.push_back( getSurfaceCoords(cut_geo[i_surf]) );
+    }
+}
+
 
 
 
 
 // ========================================
-// Functions for making averaging region arrangments
+// Functions for making/editting averaging region arrangments
 // ========================================  
 
 void MakeARMesh_Uniform2DRectangular(const int N_AR_x, const double &ell_x, const double &L_x,
@@ -512,4 +612,224 @@ void MakeARMesh_Uniform3DRectangular(const int N_AR_x, const double &ell_x, cons
         }
     }
 }
-    
+
+bool createMergedARGroups(const std::vector<std::pair<int, int>> &ARs,
+    double min_area_threshold, double max_AR_length, double max_AR_length_ratio,
+    std::vector<std::vector<int>> &AR_tags_toBeMerged, std::vector<double> &AR_pore_space_areas)
+{
+    // In AR_tags_toBeMerged, the inner list is {merge host tag (i.e., the big AR), merging tag (i.e., the smoll AR)}
+    bool anything_Merged = false;
+
+    for (int i_ar = 0; i_ar < ARs.size(); i_ar++)
+    {
+        // Get AR information
+        int dim = ARs[i_ar].first;
+        int tag = ARs[i_ar].second;
+
+        // Compute AR area
+        double AR_pore_space_area;
+        gmsh::model::occ::getMass(dim, tag, AR_pore_space_area);
+
+        // Decide if the AR must be merged (i.e., it is smaller than the threshold)
+        if (AR_pore_space_area < min_area_threshold)
+        {
+            // Get the max/min x/y coordinates of the AR
+            std::vector<double> min_max_x_y = getMinMaxSurfaceCoords(tag); // min x, max x, min y, max y, min z, max z ---> min_max_x_y[0], min_max_x_y[1], min_max_x_y[2], min_max_x_y[3], min_max_x_y[4], min_max_x_y[5] 
+            
+            // See if a "host" AR can be found to merge the small AR to
+            bool found_host = false;
+            for (int j_ar = 0; j_ar < ARs.size(); j_ar++)
+            {
+                if (i_ar == j_ar) { continue; } // AR cannot host itself
+                
+                // Get the tag of the potential host AR
+                int tag2 = ARs[j_ar].second;
+
+                // If host AR, AR[j_ar], is not adjacent to small AR, AR[i_ar], try the next AR
+                if (!areAdjacentEntities(dim, tag, tag2)) { continue; }
+                
+                // For now, we require the host AR to satisfy the min_area_threshold itself; otherwise, try the next AR
+                double ARj_area;
+                gmsh::model::occ::getMass(dim, tag2, ARj_area);
+                if (ARj_area < min_area_threshold) { continue; }
+
+
+                // TODO: check AR_tags_toBeMerged to see if host AR has already been merged. Then, consider merged host AR
+                //       as a potential host, not just AR[j_ar]
+
+
+                // If potential host AR is adjacent and has large enough area, get the max/min x/y coordinates of the host AR
+                std::vector<double> new_min_max_x_y = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+                std::vector<double> min_max_x_y2 = getMinMaxSurfaceCoords(tag2);
+                new_min_max_x_y[0] = min_max_x_y[0] < min_max_x_y2[0] ? min_max_x_y[0] : min_max_x_y2[0];
+                new_min_max_x_y[1] = min_max_x_y[1] > min_max_x_y2[1] ? min_max_x_y[1] : min_max_x_y2[1];
+                new_min_max_x_y[2] = min_max_x_y[2] < min_max_x_y2[2] ? min_max_x_y[2] : min_max_x_y2[2];
+                new_min_max_x_y[3] = min_max_x_y[3] > min_max_x_y2[3] ? min_max_x_y[3] : min_max_x_y2[3];
+                new_min_max_x_y[4] = min_max_x_y[4] < min_max_x_y2[4] ? min_max_x_y[4] : min_max_x_y2[4];
+                new_min_max_x_y[5] = min_max_x_y[5] > min_max_x_y2[5] ? min_max_x_y[5] : min_max_x_y2[5];
+                
+
+                // TODO: again, host AR might be a merged AR. Get the min max x y for the merged AR (i.e., AR_tags_toBeMerged)
+
+
+                // If merging the host and small ARs would make the new AR too big, try the next AR
+                if ( new_min_max_x_y[1] - new_min_max_x_y[0] > max_AR_length ||
+                     new_min_max_x_y[3] - new_min_max_x_y[2] > max_AR_length ||
+                     new_min_max_x_y[5] - new_min_max_x_y[4] > max_AR_length ) { continue; }
+                
+                // If merging the host and small ARs would create an AR with too large a length scale ratio, try the next AR
+                if (new_min_max_x_y[4] == 0.0 && new_min_max_x_y[5] == 0.0)
+                {
+                    if ( (new_min_max_x_y[1] - new_min_max_x_y[0])/(new_min_max_x_y[3] - new_min_max_x_y[2]) >= max_AR_length_ratio ||
+                         (new_min_max_x_y[3] - new_min_max_x_y[2])/(new_min_max_x_y[1] - new_min_max_x_y[0]) >= max_AR_length_ratio ) { continue; }
+                }
+                else
+                {
+                    if ( (new_min_max_x_y[1] - new_min_max_x_y[0])/(new_min_max_x_y[3] - new_min_max_x_y[2]) >= max_AR_length_ratio ||
+                         (new_min_max_x_y[3] - new_min_max_x_y[2])/(new_min_max_x_y[1] - new_min_max_x_y[0]) >= max_AR_length_ratio ||
+                         (new_min_max_x_y[1] - new_min_max_x_y[0])/(new_min_max_x_y[5] - new_min_max_x_y[4]) >= max_AR_length_ratio ||
+                         (new_min_max_x_y[5] - new_min_max_x_y[4])/(new_min_max_x_y[1] - new_min_max_x_y[0]) >= max_AR_length_ratio ||
+                         (new_min_max_x_y[3] - new_min_max_x_y[2])/(new_min_max_x_y[5] - new_min_max_x_y[4]) >= max_AR_length_ratio ||
+                         (new_min_max_x_y[5] - new_min_max_x_y[4])/(new_min_max_x_y[3] - new_min_max_x_y[2]) >= max_AR_length_ratio ) { continue; }
+                }
+                
+                
+                // If everything is satisfied, merge the host and small ARs
+                bool new_entry = true;
+                for (int i = 0; i < AR_tags_toBeMerged.size(); i++)
+                {
+                    if (AR_tags_toBeMerged[i][0] == tag2)
+                    {
+                        AR_tags_toBeMerged[i].push_back( tag );
+                        AR_pore_space_areas[i] += AR_pore_space_area;
+                        new_entry = false;
+                        break;
+                    }
+                }
+                if (new_entry) { AR_tags_toBeMerged.push_back( {tag2, tag} ); AR_pore_space_areas.push_back( ARj_area + AR_pore_space_area ); }
+                
+                found_host = true;
+                anything_Merged = true;
+                break;
+            }
+            
+            if (!found_host) { AR_tags_toBeMerged.push_back( {tag} ); AR_pore_space_areas.push_back( AR_pore_space_area ); }
+
+        }
+        else
+        {
+            bool new_entry = true;
+            for (int i = 0; i < AR_tags_toBeMerged.size(); i++)
+            {
+                if (AR_tags_toBeMerged[i][0] == tag) { new_entry = false; break; }
+            }
+            if (new_entry) { AR_tags_toBeMerged.push_back( {tag} ); AR_pore_space_areas.push_back( AR_pore_space_area ); }
+        }
+    }
+
+    return anything_Merged;
+}
+
+
+
+
+
+
+
+// ========================================
+// Functions for separating averaging region lines from cut geometry lines 
+// ========================================  
+
+void separateARandGeometrySurfaceLines(const std::vector<std::pair<int, int>> &ARs,
+    const std::vector<std::vector<std::vector<std::vector<double>>>> &tool_geo,
+    std::vector<std::vector<std::pair<int, int>>> &ARs_lns,
+    std::vector<std::vector<std::pair<int, int>>> &tool_sfs_lns)
+{
+    // Define necessary variables
+    std::vector<std::pair<int, int>> AR_all_lns;
+    std::vector<std::vector<std::vector<double>>> AR_c_geo;
+    int sf_ind;
+
+    // Get the boundaries of the geometry in each AR after the cut
+    for (int i_ar = 0; i_ar < ARs.size(); i_ar++)
+    {
+        // Get the line tags for the AR after the cut
+        assert (ARs[i_ar].first == 2);
+        gmsh::model::getBoundary({ARs[i_ar]}, AR_all_lns, false, false, false);
+        
+        // Get the geometry for the AR after the cut
+        AR_c_geo = getSurfaceCoords(ARs[i_ar].second);
+
+        // Look through and see if any of the lines match the previous geo lines
+        for (int i_ln_c = 0; i_ln_c < AR_c_geo.size(); i_ln_c++)
+        {
+            bool isGeoLine = false;
+            for (int i_sf_uc = 0; i_sf_uc < tool_geo.size(); i_sf_uc++) // Looking through the uncut geo surfaces
+            {
+                for (int i_ln_uc = 0; i_ln_uc < tool_geo[i_sf_uc].size(); i_ln_uc++) // Looking through the uncut geo lines
+                {
+                    // See if the lines from the cut geometry and uncut geometry are parallel and share an end point. If so, it is likely that they are/from the same line
+                    if (areParallel(AR_c_geo[i_ln_c], tool_geo[i_sf_uc][i_ln_uc]) && compareLineEndPoints(AR_c_geo[i_ln_c], tool_geo[i_sf_uc][i_ln_uc]))
+                    {
+                        isGeoLine = true;
+                        sf_ind = i_sf_uc;
+                        break;
+                    }
+                }
+                if (isGeoLine) { break; }
+            }
+
+            // If the cut geo line did compare to the uncut geo line, save it
+            if (isGeoLine) { tool_sfs_lns[sf_ind].push_back(AR_all_lns[i_ln_c]); } // NOTE: tool_sfs_lns retains the same surfaces as tool_geo. There may be more lines in each surface though
+            else { ARs_lns[i_ar].push_back(AR_all_lns[i_ln_c]); } // Assuming that the remainder lines are the AR boundaries
+        }
+    }
+}
+
+void separateARandGeometryVolumeSurfaces(const std::vector<std::pair<int, int>> &ARs,
+    const std::vector<std::vector<std::vector<std::vector<std::vector<double>>>>> &tool_geo_3D,
+    std::vector<std::vector<std::pair<int, int>>> &ARs_srfcs,
+    std::vector<std::vector<std::pair<int, int>>> &tool_vol_srfcs)
+{
+    // Define necessary variables
+    std::vector<std::pair<int, int>> AR_all_srfcs;
+    std::vector<std::vector<std::vector<std::vector<double>>>> AR_c_geo_3D;
+    int vol_ind;
+
+    // Get the boundaries of the geometry in each AR after the cut
+    for (int i_ar = 0; i_ar < ARs.size(); i_ar++)
+    {
+        // Get the surface tags for the AR after the cut
+        assert (ARs[i_ar].first == 3);
+        gmsh::model::getBoundary({ARs[i_ar]}, AR_all_srfcs, false, false, false);
+        
+        // Get the geometry for the AR after the cut
+        AR_c_geo_3D = getVolumeCoords(ARs[i_ar].second);
+
+        // Look through and see if any of the surfaces match the previous geo surfaces
+        for (int i_srfc_c = 0; i_srfc_c < AR_c_geo_3D.size(); i_srfc_c++)
+        {
+            bool isGeoSurface = false;
+            for (int i_vol_uc = 0; i_vol_uc < tool_geo_3D.size(); i_vol_uc++) // Looking through the uncut geo volumes
+            {
+                for (int i_srfc_uc = 0; i_srfc_uc < tool_geo_3D[i_vol_uc].size(); i_srfc_uc++) // Looking through the uncut geo surfaces
+                {
+                    // See if the surfaces from the cut geometry and uncut geometry are parallel and share a corner point. If so, it is likely that they are/from the same surface
+                    if (areParallel(AR_c_geo_3D[i_srfc_c], tool_geo_3D[i_vol_uc][i_srfc_uc]) && compareSurfaceEndPoints(AR_c_geo_3D[i_srfc_c], tool_geo_3D[i_vol_uc][i_srfc_uc]))
+                    {
+                        isGeoSurface = true;
+                        vol_ind = i_vol_uc;
+                        break;
+                    }
+                }
+                if (isGeoSurface) { break; }
+            }
+
+            // If the cut geo surface did compare to the uncut geo surface, save it
+            if (isGeoSurface) { tool_vol_srfcs[vol_ind].push_back(AR_all_srfcs[i_srfc_c]); } // NOTE: tool_vol_srfcs retains the same volumes as tool_geo. There may be more surfaces in each volume though
+            else { ARs_srfcs[i_ar].push_back(AR_all_srfcs[i_srfc_c]); } // Assuming that the remainder surfaces are the AR boundaries
+        }
+    }
+}
+
+

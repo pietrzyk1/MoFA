@@ -79,6 +79,13 @@ struct JSONVal : JSONARGType
         for (int item : list) { vec.emplace_back(item); }
         *this = vec;
     }
+    // Allows JSONVal variables to be assigned as a const list of ints (e.g., JSONVal a = b, where b is a const vector<int>)
+    JSONVal(const vector<int> &list)
+    {
+        vector<JSONVal> vec;
+        for (int item : list) { vec.emplace_back(item); }
+        *this = vec;
+    }
     // Allows JSONVal variables to be assigned as vector<vector<int>> (e.g., JSONVal a = b, where b is a vector<vector<int>>)
     JSONVal(vector<vector<int>> &list)
     {
