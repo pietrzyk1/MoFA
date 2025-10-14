@@ -157,7 +157,7 @@ int main(int argc, char **argv)
         sub_dict.getValue("min area threshold", min_area_threshold);
         sub_dict.getValue("max AR length", max_AR_length);
         sub_dict.getValue("max AR length ratio", max_AR_length_ratio);
-        
+
         JSONDict subsub_dict = *sub_dict["N_AR"];
         subsub_dict.getValue("x", N_AR_x);
         subsub_dict.getValue("y", N_AR_y);
@@ -447,6 +447,43 @@ int main(int argc, char **argv)
             }
         }
 
+
+
+
+
+
+
+
+
+
+        // ========================================
+        // Merge the small AR pore spaces with others (If things are merged, do not use AR average; use pore-space average in simulations) 
+        // ========================================
+        std::vector<std::vector<int>> AR_tags_toBeMerged; // The inner list is {merge host tag (i.e., the big AR), merging tag (i.e., the smoll AR)}
+        if (merge_ARs == 1) { anything_Merged = createMergedARGroups(ARs, min_area_threshold, max_AR_length, max_AR_length_ratio, AR_tags_toBeMerged, AR_pore_space_areas); }
+
+        if (anything_Merged)
+        {
+            // Create a physical groups from the AR merge groups
+            for (int i = 0; i < AR_tags_toBeMerged.size(); i++) { AR_tags.push_back( gmsh::model::addPhysicalGroup(2, AR_tags_toBeMerged[i]) ); }
+        }
+        else
+        {
+            // Create a physical group for each AR
+            for (int i_ar = 0; i_ar < ARs.size(); i_ar++)
+            {
+                // Get AR information
+                int dim = ARs[i_ar].first;
+                int tag = ARs[i_ar].second;
+                AR_tags.push_back( gmsh::model::addPhysicalGroup(dim, {tag}) );
+            }
+        }
+
+
+
+
+        // Moved these below the "Merge the small AR pore spaces" for now to allow AR tags start at 1.
+        
         // ========================================
         // Create inlet, outlet, and no slip physical groups
         // ========================================
@@ -476,34 +513,6 @@ int main(int argc, char **argv)
         
         no_slip_tag = gmsh::model::addPhysicalGroup(1, no_slip_ln_tags);
         unused_tag = gmsh::model::addPhysicalGroup(1, unused_ln_tags);
-
-
-
-        // ========================================
-        // Merge the small AR pore spaces with others (If things are merged, do not use AR average; use pore-space average in simulations) 
-        // ========================================
-        if (merge_ARs == 1)
-        {
-            std::vector<std::vector<int>> AR_tags_toBeMerged; // The inner list is {merge host tag (i.e., the big AR), merging tag (i.e., the smoll AR)}
-            anything_Merged = createMergedARGroups(ARs, min_area_threshold, max_AR_length, max_AR_length_ratio, AR_tags_toBeMerged, AR_pore_space_areas);
-            
-            // Create a physical group from the AR
-            for (int i = 0; i < AR_tags_toBeMerged.size(); i++)
-            {
-                AR_tags.push_back( gmsh::model::addPhysicalGroup(2, AR_tags_toBeMerged[i]) );
-            }
-        }
-        else
-        {
-            // Create physical groups for ARs
-            for (int i_ar = 0; i_ar < ARs.size(); i_ar++)
-            {
-                // Get AR information
-                int dim = ARs[i_ar].first;
-                int tag = ARs[i_ar].second;
-                AR_tags.push_back( gmsh::model::addPhysicalGroup(dim, {tag}) );
-            }
-        }
 
     }
     

@@ -520,7 +520,7 @@ int main(int argc, char *argv[])
     
     cout << "Complete." << endl;
     
-
+    
     // ===============================================================
     //   Define the block operator for the system.
     // ===============================================================
@@ -659,6 +659,9 @@ int main(int argc, char *argv[])
     c_sol.MakeRef(fespace_c, sol_BLK.GetBlock(0), 0);
     c_sol.Save((*closure_output_dir + closure_output_file_name).c_str());
     
+    // Save the mesh
+    mesh->Save(*mesh_output_dir + mesh_output_file_name);
+
     // Extract the residual data from the block solution vector (and print the data to cout for viewing)
     vector<double> a_sol_cpp_vec;
     cout << "Closure residuals:" << endl;
@@ -707,9 +710,6 @@ int main(int argc, char *argv[])
     mesh_info["AR"] = &AR_dict_temp;
     mesh_info.saveToFile(mesh_info_file_path);
     
-    // Save the mesh
-    mesh->Save(*mesh_output_dir + mesh_output_file_name);
-
 
     // ===============================================================
     // 17. Free the used memory.

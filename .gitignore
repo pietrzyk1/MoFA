@@ -21,6 +21,8 @@ Input_File_Generator/include/generate_input_file_STAGED.h
 
 Machine_Learning_Tools/*
 
+Solvers/Transport_ROM_Closure_Solver/*
+
 Solvers/Cahn_Hilliard_Solver/*
 Solvers/Cahn_Hilliard_Closure_Solver/*
 Solvers/Upscaled_Cahn_Hilliard_Solver/*

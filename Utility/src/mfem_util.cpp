@@ -408,6 +408,7 @@ void AveragingOperator::GetARIndices(Mesh *mesh_)
 // Function for creating the averaging operator from the avg space and mixed bilinear form
 void AveragingOperator::CreateAvgOperator(const double tol)
 {
+    /*
     // Get the sparse matrix of the bilinear form
     SparseMatrix &varf_avg_SpMat(varf_avg->SpMat());
     
@@ -443,6 +444,72 @@ void AveragingOperator::CreateAvgOperator(const double tol)
     
     avg_mat = avg_mat_;
     AR_areas = AR_areas_;
+    */
+    PrepareUnweightedAvgOperator(tol);
+    avg_mat.Finalize();
+}
+
+// Function for creating the averaging operator from the avg space and mixed bilinear form. Depending on the avg space/mixed bilinear form used,
+// the produced avg_mat is either \integral(1 * \basis) or \integral(\basis * \basis) summed over the elements of each AR box.
+void AveragingOperator::PrepareUnweightedAvgOperator(const double tol)
+{
+    // Get the sparse matrix of the bilinear form
+    SparseMatrix &varf_avg_SpMat(varf_avg->SpMat());
+    
+    // Sum together the rows of varf_avg_SpMat (i.e., the matrix of the mixed bilinear form) corresponding to the dummy avg-space DOFs
+    // in each averaging region (i.e., these are AR_Dof_inds). Insert the sums as rows in avg_mat.
+    // Finally, sum together the components of each row and store it in rhs_for_avg; these values will be used to implement non-zero
+    // averaging conditions.
+    
+    SparseMatrix avg_mat_(N_AR * vdim, varf_avg_SpMat.NumCols()); // Initialize the size of the averaging matrix
+    Vector row(varf_avg_SpMat.NumCols()), row_sum(varf_avg_SpMat.NumCols());
+    
+    Array<double> AR_areas_(N_AR);
+    Array<int> col_inds, all_col_indices(varf_avg_SpMat.NumCols()); // Create an Array of indices from 0 to the number of columns in cavg_SpMat
+    for(int i = 0; i < all_col_indices.Size(); i++) { all_col_indices[i] = i; } // Defines cavg_SpMat
+    
+    for (int i_vd = 0; i_vd < vdim; i_vd++) // For each vector dimension...
+    {
+        for (int i_AR = 0; i_AR < N_AR; i_AR++) // ...and each averaging region...
+        {
+            row_sum = 0.0;
+            for (int i = 0; i < AR_Dof_inds[i_vd][i_AR].size(); i++) // ...and each DOF...
+            {
+                varf_avg_SpMat.GetRow(AR_Dof_inds[i_vd][i_AR][i], col_inds, row); // ...get the row of cavg_SpMat...
+                for (int i_sum = 0; i_sum < col_inds.Size(); i_sum++) { row_sum[col_inds[i_sum]] += row[i_sum]; } // ...and add it row_sum to sum the DOF rows.
+            }
+            for (int i = 0; i < row_sum.Size(); i++) { if (abs(row_sum[i]) < tol) { row_sum[i] = 0; }} // If a component of row_sum is really small, just set it to 0; it is likely numerical error.
+            avg_mat_.SetRow(i_AR + N_AR*i_vd, all_col_indices, row_sum); // Insert the row_sum in avg_mat, the matrix discribing the averaging operator
+            if (i_vd == 0) { AR_areas_[i_AR] = row_sum.Sum(); } // Keep the sum of the row for implementing averaging conditions (only do this for the first component; assume it will be the same for the others)
+        }
+    }
+    
+    avg_mat = avg_mat_;
+    AR_areas = AR_areas_;
+}
+
+// Function for finalizing the weighted averaging operator (i.e., multiply the rows of avg_mat by the weight function's DOFs in a component-wise fashion).
+void AveragingOperator::CreateWeightedAvgOperator(const GridFunction &weight_func)
+{
+    // Assert that the weight function's finite element space is the same as the dummy fespace used in creating the operator
+    assert (weight_func.FESpace() == fespace_avg.get());
+    
+    Array<int> col_inds;
+    Vector row(avg_mat.NumCols()), weighted_row(avg_mat.NumCols());
+
+    // Copy the unweighted average matrix into weighted_avg_mat
+    weighted_avg_mat = avg_mat;
+
+    // Go through the rows of weighted_avg_mat and weight each component with the weight function
+    for (int i_row = 0; i_row < N_AR * vdim; i_row++)
+    {
+        weighted_avg_mat.GetRow(i_row, col_inds, row);
+        for (int i = 0; i < col_inds.Size(); i++) { weighted_row[col_inds[i]] = weight_func[col_inds[i]] * row[i]; }
+        weighted_avg_mat.SetRow(i_row, col_inds, weighted_row);
+    }
+
+    // Finalize the weighted average matrix
+    weighted_avg_mat.Finalize();
 }
 
 // Function that zeroes-out the columns of the avging operator corresponding to DOFs marked by "bdr_attr_is_ess".
@@ -485,6 +552,13 @@ void AveragingOperator::ApplyAvgOperator(const Vector &x, Vector &avg, const vec
             count += 1;
         }
     }
+}
+void AveragingOperator::ApplyWeightedIntegralOperator(const Vector &x, Vector &avg)
+{
+    assert(avg.Size() == vdim * N_AR);
+
+    // Apply the weighted averaging operator
+    weighted_avg_mat.Mult(x, avg);
 }
 
 // Static method for computing the AR porosities

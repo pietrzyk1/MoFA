@@ -310,15 +310,18 @@ private:
     int DOFs_per_vdim; // This is for the dummy avg space (before making it size N_AR * vdim)
     
     unique_ptr<FiniteElementSpace> fespace = nullptr;
-    unique_ptr<FiniteElementSpace> fespace_avg = nullptr; // FiniteElementSpace *fespace_avg = nullptr;
-    unique_ptr<FiniteElementCollection> fec_avg = nullptr; //FiniteElementCollection *fec_avg = nullptr;
-    unique_ptr<MixedBilinearForm> varf_avg = nullptr; // MixedBilinearForm *varf_avg = nullptr;
-
+    unique_ptr<FiniteElementSpace> fespace_avg = nullptr;
+    unique_ptr<FiniteElementCollection> fec_avg = nullptr;
+    unique_ptr<MixedBilinearForm> varf_avg = nullptr;
+    
     vector<vector<int>> AR_Elem_inds;
     vector<vector<vector<int>>> AR_Dof_inds;
 
     SparseMatrix avg_mat;
     Array<double> AR_areas;
+
+    SparseMatrix weighted_avg_mat;
+    bool correctARAreas = false;
 
 
 public:
@@ -344,6 +347,35 @@ public:
         CreateBilinearForm(fespace_);
         GetARIndices(fespace_->GetMesh());
         CreateAvgOperator();
+        correctARAreas = true;
+    }
+    AveragingOperator(FiniteElementSpace *fespace_, FiniteElementSpace *fespace_avg_, bool domain_avg = false) : fespace(fespace_), fespace_avg(fespace_avg_)
+    {
+        // Get the number of averaging regions that should be defined over the mesh
+        if (!domain_avg) { N_AR = fespace_->GetMesh()->attributes.Max(); } 
+        else { N_AR = 1; }
+
+        // Get vdim (i.e., the number of vector components) used to define the finite element space
+        vdim = fespace_->GetVDim();
+        
+        // Initialize AR_Elem_inds as an array of arrays
+        for (int i = 0; i < N_AR; i++) { AR_Elem_inds.push_back(vector<int>()); } 
+        
+        AR_areas.SetSize(N_AR); // Initialize the size of the AR_areas vector
+
+        // Initialize AR_Dof_inds
+        for (int i_vd = 0; i_vd < vdim; i_vd++)
+        {
+            AR_Dof_inds.push_back(vector<vector<int>>());
+            for (int i_AR = 0; i_AR < N_AR; i_AR++) { AR_Dof_inds[i_vd].push_back(vector<int>()); }
+        }
+
+        // Carry out the initialization/avg. operator creation procedure
+        DOFs_per_vdim = fespace_avg->FEColl()->GetFE(fespace->GetMesh()->GetElementBaseGeometry(0), 0)->GetDof(); // Get the number of DOFs per vector component of FiniteElementCollection
+        CreateBilinearForm(fespace_);
+        GetARIndices(fespace->GetMesh());
+        PrepareUnweightedAvgOperator();
+        correctARAreas = false;
     }
 
     // Function for creating the dummy avg finite element space that will be used to generate the averaging operator
@@ -358,6 +390,13 @@ public:
     // Function for creating the averaging operator from the avg space and mixed bilinear form
     void CreateAvgOperator(const double tol = 1e-15);
 
+    // Function for creating (but not finalizing) the unweighted averaging operator from the avg space and mixed bilinear form,
+    // as well as computing the AR pore-space areas.
+    void PrepareUnweightedAvgOperator(const double tol = 1e-15);
+
+    // Function for creating (and finalizing) the weighted averaging operator from the non-finalized unweighted averaging operator.
+    void CreateWeightedAvgOperator(const GridFunction &weight_func);
+
     // Function that zeroes-out the columns of the avging operator corresponding to DOFs marked by "bdr_attr_is_ess".
     // For the zeroed entries, the function multiplies the "pre-zeroed" entry value by the corresponding value in "sol" and subtracts the product from "rhs".
     void EliminateTrialEssentialBC(const Array<int> &bdr_attr_is_ess, const Vector &sol, Vector &rhs);
@@ -365,6 +404,8 @@ public:
     // Function for applying the averaging operator
     void ApplyAvgOperator(const Vector &x, Vector &avg);
     void ApplyAvgOperator(const Vector &x, Vector &avg, const vector<double> &porosities);
+    void ApplyWeightedIntegralOperator(const Vector &x, Vector &avg);
+
 
     // Static method for computing the AR porosities
     static void ComputePorosities(const vector<double> &pore_areas, const vector<double> &AR_areas, vector<double> &porosities);
@@ -377,7 +418,7 @@ public:
     int Getvdim() { return vdim; }
 
     // Function to get the averaging region areas
-    Array<double> GetAR_areas() { return AR_areas; }
+    Array<double> GetAR_areas() { if (correctARAreas) {return AR_areas;} else { cout << "AveragingOperator: GetAR_areas(): AR areas should only be obtained from an unweighted AveragingOperator." << endl; exit(1); } }
 
     // Function to get the averaging operator matrix
     SparseMatrix Getavg_mat() { return avg_mat; }
