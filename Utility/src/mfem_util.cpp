@@ -372,14 +372,22 @@ void AveragingOperator::CreateBilinearForm(FiniteElementSpace *fespace_)
 }
 
 // Function for getting 1.) the indices of elements inside each AR, and 2.) the indices of dofs (in the dummy space) of each element inside each AR
-void AveragingOperator::GetARIndices(Mesh *mesh_)
+void AveragingOperator::GetARIndices(Mesh *mesh_, vector<int> AR_tags)
 {
+    // Define default AR_tags (i.e., {1 -> N_AR}) if not provided
+    if (AR_tags.size() == 1 && AR_tags[0] == -1)
+    {
+        AR_tags[0] = 1;
+        for (int i = 1; i < N_AR; i++) { AR_tags.push_back( i + 1 ); }
+    }
+    
     // Get the indices of the elements inside each averaging region
     for (int i_Elem = 0; i_Elem < mesh_->GetNE(); i_Elem++)
     {
         for (int i_AR = 0; i_AR < N_AR; i_AR++)
         {
-            if (mesh_->GetAttribute(i_Elem) == i_AR + 1)
+            //if (mesh_->GetAttribute(i_Elem) == i_AR + 1)
+            if (mesh_->GetAttribute(i_Elem) == AR_tags[i_AR])
             {
                 AR_Elem_inds[i_AR].push_back(i_Elem);
                 break;
@@ -574,125 +582,18 @@ void AveragingOperator::ComputePorosities(const vector<double> &pore_areas, cons
     }
 }
 
-
-
-
-/*
-// ===============================================================
-//   Define the functions for the TransportOperator class.
-// ===============================================================
-// Define the class constructor
-TransportOperator::TransportOperator(BlockOperator &M_, BlockOperator &K_, BlockVector &b_, double dt_, BlockDiagonalPreconditioner &M_PC_, BlockDiagonalPreconditioner &T_PC_)
-                 : TimeDependentOperator(K_.Width(), K_.Height(), 0.0), M(M_), K(K_), b(b_), dt(dt_), M_PC(M_PC_), T_PC(T_PC_)
+// Function for getting a diagonal matrix of the AR pore areas
+SparseMatrix AveragingOperator::GetAR_areas_SpMat()
 {
-    int maxIter(5000);
-    real_t rtol(1.0e-7);
-    real_t atol(0.0);
-
-    // For Explicit Euler
-    M_inv.iterative_mode = false;
-    M_inv.SetRelTol(rtol);
-    M_inv.SetAbsTol(atol);
-    M_inv.SetMaxIter(maxIter);
-    M_inv.SetPrintLevel(0);
-    M_inv.SetOperator(M);
-    if (&M_PC) { M_inv.SetPreconditioner(M_PC); }
-    
-    // For Implicit Euler
-    T_inv.iterative_mode = true;
-    T_inv.SetRelTol(rtol);
-    T_inv.SetAbsTol(atol);
-    T_inv.SetMaxIter(maxIter);
-    T_inv.SetPrintLevel(0);
-    M_Kdt = AddBlockOperators(1.0, M, dt, K);
-    T_inv.SetOperator(*M_Kdt);
-    if (&T_PC) { T_inv.SetPreconditioner(T_PC); }
-};
-
-// Define the Mult function for the operator
-void TransportOperator::Mult(const Vector &u, Vector &du_dt) const
-{
-    // For reference:   M * du/dt + K * u = b
-    // We solve for du/dt.
-
-    K.Mult(u, du_dt); // Compute K u
-    du_dt *= -1; // Move K u to RHS
-    du_dt += b; // -K u + b
-    M_inv.Mult(du_dt, du_dt); // Compute du/dt = (M^{-1}) * (-K u + b)
-}
-
-// Define the implicit Mult function for the operator
-void TransportOperator::ImplicitSolve(const real_t dt, const Vector &u, Vector &du_dt)
-{
-    // For reference:   M * du/dt + K * (u + dt * du/dt) = b
-    // We solve for du/dt.
-
-    Vector RHS = u;
-    K.Mult(u, RHS); // Compute  K u
-    RHS *= -1; // Move K u to RHS
-    RHS += b; // RHS = -K u + b
-    T_inv.Mult(RHS, du_dt); // Compute du/dt = ((M + K*dt)^{-1}) * (-K u + b)
-}
-
-// Primarily written by ChatGPT.
-unique_ptr<BlockOperator> TransportOperator::AddBlockOperators(const double A_coeff, const BlockOperator &A, const double B_coeff, const BlockOperator &B)
-{
-    MFEM_VERIFY(A.NumRowBlocks() == B.NumRowBlocks(), "Row block size mismatch");
-    MFEM_VERIFY(A.NumColBlocks() == B.NumColBlocks(), "Col block size mismatch");
-
-
-    auto row_offsets = A.RowOffsets();
-    auto col_offsets = A.ColOffsets(); 
-    
-    unique_ptr<BlockOperator> C(new BlockOperator(row_offsets, col_offsets));
-    
-
-    for (int i = 0; i < A.NumRowBlocks(); ++i)
-    {
-        for (int j = 0; j < A.NumColBlocks(); ++j)
-        {
-            const Operator &Ai = A.GetBlock(i, j);
-            const Operator &Bi = B.GetBlock(i, j);
-            
-            // If both blocks exist
-            if (&Ai && &Bi)
-            {
-                const auto &As = dynamic_cast<const SparseMatrix *>(&Ai);
-                const auto &Bs = dynamic_cast<const SparseMatrix *>(&Bi);
-                MFEM_VERIFY(&As && &Bs, "Non-sparse matrix blocks not supported");
-                MFEM_VERIFY(&As != nullptr && &Bs != nullptr, "One of the added matrices is null");
-                
-                SparseMatrix *Cij = Add(A_coeff, *As, B_coeff, *Bs);
-                C->SetBlock(i, j, Cij);
-            }
-            else if (&Ai)
-            {
-                const auto &As = dynamic_cast<const SparseMatrix *>(&Ai);
-                MFEM_VERIFY(&As, "Non-sparse block in A");
-                
-                SparseMatrix *Cij = new SparseMatrix(*As);
-                *Cij *= A_coeff;
-                C->SetBlock(i, j, Cij); // copy
-            }
-            else if (&Bi)
-            {
-                const auto &Bs = dynamic_cast<const SparseMatrix *>(&Bi);
-                MFEM_VERIFY(&Bs, "Non-sparse block in B");
-                
-                SparseMatrix *Cij = new SparseMatrix(*Bs);
-                *Cij *= B_coeff; 
-                C->SetBlock(i, j, Cij); // copy
-            }
-            else
-            {
-                C->SetBlock(i, j, nullptr); // no block
-            }
+    SparseMatrix avg_area_mat(vdim * N_AR, vdim * N_AR);
+    for (int i_vd = 0; i_vd < vdim; i_vd++) {
+        for (int i_ar = 0; i_ar < N_AR; i_ar++) {
+            avg_area_mat.Add(i_ar + i_vd*N_AR, i_ar + i_vd*N_AR, AR_areas[i_ar]);
         }
     }
- 
-    return C;
+    return avg_area_mat;
 }
-*/
+
 
 
 
@@ -822,5 +723,517 @@ void LinearTimeDependentOperator::ImplicitSolve(const real_t dt, const Vector &u
     du_dt += b; // -A u + b
     implicitSolver->Mult(du_dt, du_dt); // Compute du/dt = ((M + A*dt)^{-1}) * (-A u + b)
 }
+
+
+
+
+
+// Function for projecting an average solution vector onto a GridFunction. We assume the
+// GridFunction has a pore-scale finite element space. Use a DG space
+void CreateAvgSolGridFunction(const Vector &sol, GridFunction &u, const string avg_area_type)
+{
+    // Save relevant GridFunction entities to variables to make manipulation easier
+    FiniteElementSpace *fes = u.FESpace();
+    
+    Mesh *mesh = fes->GetMesh();
+    int N_elem = mesh->GetNE();
+    
+    // Ensure the solution is all zero to start
+    u = 0.0;
+
+    // Get the indices of the elements inside each averaging region
+    for (int i_Elem = 0; i_Elem < N_elem; i_Elem++)
+    {
+        int AR_ind;
+        if (avg_area_type == "AR") { AR_ind = i_Elem;}
+        else { AR_ind = mesh->GetAttribute(i_Elem) - 1;} // Get the AR index of the element
+
+        // Get the vdofs of the element
+        Array<int> vdofs;
+        fes->GetElementVDofs(i_Elem, vdofs);
+
+        // Set each vdof to the average solution
+        for (int i_qp = 0; i_qp < vdofs.Size(); i_qp++) {
+            u(vdofs[i_qp]) = sol.Elem(AR_ind);
+        }
+    }
+}
+
+
+
+
+
+// ===============================================================
+//   Define the functions for the ResultsSaver class.
+// ===============================================================
+// Function for obtaining the closure residuals from the solution block vector
+void ResultsSaver::ObtainClosureResiduals(const BlockVector &sol_BLK, const vector<int> &block_IDs_for_saving_residuals, const vector<int> &fespace_vdim, int N_AR)
+{
+    // Make sure the required variables have been set
+    assert (N_residual_sets > 0);
+    assert (block_IDs_for_saving_residuals.size() == N_residual_sets);
+    
+    // Go through the closure residual blocks in the solution and save the residuals
+    for (int i_BI = 0; i_BI < N_residual_sets; i_BI++) // i_BI < block_IDs_for_saving_residuals.size()
+    {
+        residuals.push_back( vector<vector<double>>() );
+        if (solve_mode == "serial") { cout << "Closure residuals (placed on RHS): Equation " << i_BI << endl; }
+        for (int i_vd = 0; i_vd < fespace_vdim[i_BI]; i_vd++)
+        {
+            residuals[i_BI].push_back( vector<double>() );
+            for (int i_AR = 0; i_AR < N_AR; i_AR++)
+            {
+                residuals[i_BI][i_vd].push_back( sol_BLK.GetBlock(block_IDs_for_saving_residuals[i_BI]).Elem(i_AR + i_vd * N_AR) );
+                if (solve_mode == "serial") { cout << residuals[i_BI][i_vd][i_AR] << endl; }
+            }
+        }
+    }
+
+    // Initialize the JSONDicts with fespace_vdim
+    InitializeJSONDicts_EqLevel(fespace_vdim);
+}
+void ResultsSaver::ObtainClosureResiduals(const BlockVector &sol_BLK, const vector<int> &block_IDs_for_saving_residuals, const vector<int> &fespace_vdim, int N_AR, const vector<int> AR_inds)
+{
+    // Make sure the required variables have been set
+    assert (N_residual_sets > 0);
+    assert (block_IDs_for_saving_residuals.size() == N_residual_sets);
+    
+    // Go through the closure residual blocks in the solution and save the residuals
+    for (int i_BI = 0; i_BI < N_residual_sets; i_BI++) // i_BI < block_IDs_for_saving_residuals.size()
+    {
+        residuals.push_back( vector<vector<double>>() );
+        if (solve_mode == "serial") { cout << "Closure residuals (placed on RHS): Equation " << i_BI << endl; }
+        for (int i_vd = 0; i_vd < fespace_vdim[i_BI]; i_vd++)
+        {
+            residuals[i_BI].push_back( vector<double>() );
+            for (int i_AR = 0; i_AR < N_AR; i_AR++)
+            {
+                bool isZero = true;
+                int i_AR_loc;
+                for (int i_loc = 0; i_loc < AR_inds.size(); i_loc++) { if (i_AR == AR_inds[i_loc]) { isZero = false; i_AR_loc = i_loc; break; } }
+                if (isZero) { residuals[i_BI][i_vd].push_back( 0.0 ); }
+                else { residuals[i_BI][i_vd].push_back( sol_BLK.GetBlock(block_IDs_for_saving_residuals[i_BI]).Elem(i_AR_loc + i_vd * AR_inds.size()) ); }
+                if (solve_mode == "serial") { cout << residuals[i_BI][i_vd][i_AR] << endl; }
+            }
+        }
+    }
+
+    // Initialize the JSONDicts with fespace_vdim
+    InitializeJSONDicts_EqLevel(fespace_vdim);
+}
+
+// Function for initializing the JSONDict vectors at the equation level.
+// This includes eq_dicts, res_dicts, CFN_dicts, and comp_dicts
+void ResultsSaver::InitializeJSONDicts_EqLevel(const vector<int> &fespace_vdim)
+{
+    // Initialize the dictionary vectors
+    for (int i_RS = 0; i_RS < N_residual_sets; i_RS++) { //i < eq_keys.size()
+        eq_dicts.push_back(JSONDict());
+        CFN_dicts.push_back(JSONDict());
+        res_dicts.push_back(JSONDict());
+        alpha_dicts.push_back(JSONDict());
+        beta_dicts.push_back(JSONDict());
+        gamma_dicts.push_back(JSONDict());
+        
+        comp_dicts.push_back(vector<JSONDict>());
+        alpha_comp_dicts.push_back(vector<JSONDict>());
+        beta_comp_dicts.push_back(vector<JSONDict>());
+        gamma_comp_dicts.push_back(vector<JSONDict>());
+
+        for (int i_vd = 0; i_vd < fespace_vdim[i_RS]; i_vd++) {
+            comp_dicts[i_RS].push_back(JSONDict());
+            alpha_comp_dicts[i_RS].push_back(JSONDict());
+            beta_comp_dicts[i_RS].push_back(JSONDict());
+            gamma_comp_dicts[i_RS].push_back(JSONDict());
+        }
+    }
+    initializedJSONDicts = true;
+}
+
+// Function for filling the residual parameters' dictionaries
+void ResultsSaver::StoreResidualParameters(const string &param_name, const vector<vector<vector<double>>> &param)
+{
+    // Make sure the required variables have been set
+    assert (N_residual_sets > 0);
+    assert (param.size() == N_residual_sets);
+    assert (param_name == "gamma");
+    gammas = param;
+}
+void ResultsSaver::StoreResidualParameters(const string &param_name, const vector<vector<double>> &param, int N_AR)
+{
+    // Make sure the required variables have been set
+    assert (N_residual_sets > 0);
+    assert (param.size() == N_residual_sets);
+    assert (param_name == "alpha" || param_name == "beta");
+
+    vector<vector<vector<double>>> *ref_vec = nullptr;
+    if (param_name == "alpha") { ref_vec = &alphas; }
+    else if (param_name == "beta") { ref_vec = &betas; }    
+
+    for (int i_BI = 0; i_BI < N_residual_sets; i_BI++) {
+        ref_vec->push_back( vector<vector<double>>() );
+        for (int i_vd = 0; i_vd < param[i_BI].size(); i_vd++) {
+            (*ref_vec)[i_BI].push_back( vector<double>() );
+            for (int i_AR = 0; i_AR < N_AR; i_AR++) {
+                (*ref_vec)[i_BI][i_vd].push_back( param[i_BI][i_AR] );
+            }
+        }
+    }
+}
+void ResultsSaver::StoreResidualParameters(const string &param_name, const vector<vector<double>> &param, int N_AR, const vector<int> AR_inds)
+{
+    // Make sure the required variables have been set
+    assert (N_residual_sets > 0);
+    assert (param.size() == N_residual_sets);
+    assert (param_name == "alpha" || param_name == "beta");
+
+    vector<vector<vector<double>>> *ref_vec = nullptr;
+    if (param_name == "alpha") { ref_vec = &alphas; }
+    else if (param_name == "beta") { ref_vec = &betas; }    
+
+    for (int i_BI = 0; i_BI < N_residual_sets; i_BI++) {
+        ref_vec->push_back( vector<vector<double>>() );
+        for (int i_vd = 0; i_vd < param[i_BI].size(); i_vd++) {
+            (*ref_vec)[i_BI].push_back( vector<double>() );
+            for (int i_AR = 0; i_AR < N_AR; i_AR++) {
+                bool isZero = true;
+                for (int i_loc = 0; i_loc < AR_inds.size(); i_loc++) { if (i_AR == AR_inds[i_loc]) { isZero = false; break; } }
+                if (isZero) { (*ref_vec)[i_BI][i_vd].push_back( 0.0 ); }
+                else { (*ref_vec)[i_BI][i_vd].push_back( param[i_BI][i_AR] ); }
+            }
+        }
+    }
+}
+
+// Function for filling component dictionaries (i.e., either residuals, alphas, betas, gammas, etc.)
+void ResultsSaver::FillComponentDictionary(vector<vector<JSONDict>> &dicts, vector<vector<vector<double>>> &val)
+{
+    for (int i_eq = 0; i_eq < N_residual_sets; i_eq++) {
+        for (int i_comp = 0; i_comp < dicts[i_eq].size(); i_comp++) {
+            dicts[i_eq][i_comp][AR_number] = val[i_eq][i_comp];
+        }
+    }
+}
+
+// Function for filling parameter dictionaries (i.e., either res_dicts, alpha_dicts, beta_dicts, gamma_dicts, etc.)
+void ResultsSaver::FillParamDictionary(vector<JSONDict> &dicts, vector<vector<JSONDict>> &val)
+{
+    for (int i_eq = 0; i_eq < N_residual_sets; i_eq++) {
+        for (int i_comp = 0; i_comp < val[i_eq].size(); i_comp++) {
+            dicts[i_eq]["component " + to_string(i_comp)] = &val[i_eq][i_comp];
+        }
+    }
+}
+
+// Function for loading the residuals and corresponding information/labeling into the various
+// dictionaries, compiling them into a main residual dictionary, and saving that dictionary
+// as a text file
+void ResultsSaver::SaveResidualDictionary(const string &residual_output_file_path)
+{
+    // Make sure the required variables have been set
+    assert (N_residual_sets > 0);
+    assert (eq_keys.size() > 0);
+    assert (recursive_iter > -1);
+    assert (AR_number != "");
+    assert (initializedJSONDicts);
+
+    // See if at least one of the parameters was filled. If so, save them in the JSON dict
+    bool saveParams = !(alphas.size() == 0 && betas.size() == 0 && gammas.size() == 0);
+
+    // If the residual file exists, load it into the dictionaries
+    ifstream file(residual_output_file_path);
+    if (file) { LoadPreexistingResidualsFile(residual_output_file_path); }
+
+    // Load up the residual component dictionaries
+    FillComponentDictionary(comp_dicts, residuals);
+    if (saveParams) {
+        FillComponentDictionary(alpha_comp_dicts, alphas);
+        FillComponentDictionary(beta_comp_dicts, betas);
+        FillComponentDictionary(gamma_comp_dicts, gammas);
+    }
+    
+    // Create the new residual and file name dictionaries
+    FillParamDictionary(res_dicts, comp_dicts);
+    if (saveParams) {
+        FillParamDictionary(alpha_dicts, alpha_comp_dicts);
+        FillParamDictionary(beta_dicts, beta_comp_dicts);
+        FillParamDictionary(gamma_dicts, gamma_comp_dicts);
+    }
+    
+    for (int i_eq = 0; i_eq < N_residual_sets; i_eq++) { CFN_dicts[i_eq][AR_number] = CFNs[i_eq]; }
+    
+    // Save the new dictionaries into the loaded dictionaries
+    for (int i_eq = 0; i_eq < N_residual_sets; i_eq++) {
+        eq_dicts[i_eq]["closure file name"] = &CFN_dicts[i_eq];
+        eq_dicts[i_eq]["residuals"] = &res_dicts[i_eq];
+        if (saveParams) {
+            eq_dicts[i_eq]["alphas"] = &alpha_dicts[i_eq];
+            eq_dicts[i_eq]["betas"] = &beta_dicts[i_eq];
+            eq_dicts[i_eq]["gammas"] = &gamma_dicts[i_eq];
+        }
+        iter_dict[eq_keys[i_eq]] = &eq_dicts[i_eq];
+    }
+    time_func_dict["iter_" + to_string(recursive_iter)] = &iter_dict;
+    residual_dict[sim_key] = &time_func_dict;
+    residual_dict.saveToFile(residual_output_file_path);
+}
+
+// Function for loading the closure residuals/closure file names from a preexisting residual
+// results file into the dictionaries for appending the new closure residuals
+void ResultsSaver::LoadPreexistingResidualsFile(const string &residual_output_file_path)
+{
+    residual_dict.loadFromFile(residual_output_file_path);
+    residual_dict.getValue(sim_key, time_func_dict);
+    time_func_dict.getValue("iter_" + to_string(recursive_iter), iter_dict);
+    for (int i_eq = 0; i_eq < N_residual_sets; i_eq++) // i_eq < eq_keys.size()
+    {
+        iter_dict.getValue(eq_keys[i_eq], eq_dicts[i_eq]);
+        
+        eq_dicts[i_eq].getValue("closure file name", CFN_dicts[i_eq]);
+        
+        eq_dicts[i_eq].getValue("residuals", res_dicts[i_eq]);
+        eq_dicts[i_eq].getValue("alphas", alpha_dicts[i_eq]);
+        eq_dicts[i_eq].getValue("betas", beta_dicts[i_eq]);
+        eq_dicts[i_eq].getValue("gammas", gamma_dicts[i_eq]);
+        for (int i_comp = 0; i_comp < comp_dicts[i_eq].size(); i_comp++)
+        {
+            res_dicts[i_eq].getValue("component " + to_string(i_comp), comp_dicts[i_eq][i_comp]);
+            if (!alpha_dicts[i_eq].empty()) { alpha_dicts[i_eq].getValue("component " + to_string(i_comp), alpha_comp_dicts[i_eq][i_comp]); }
+            if (!beta_dicts[i_eq].empty()) { beta_dicts[i_eq].getValue("component " + to_string(i_comp), beta_comp_dicts[i_eq][i_comp]); }
+            if (!gamma_dicts[i_eq].empty()) { gamma_dicts[i_eq].getValue("component " + to_string(i_comp), gamma_comp_dicts[i_eq][i_comp]); }
+        }
+    }
+}
+
+
+
+
+
+// ===============================================================
+//   Define the functions for the MeshManager class.
+// ===============================================================
+// Function for making the mesh periodic (if isPeriodic calls for it). Note, this function creates a new Mesh object that is periodic and deletes the original
+void MeshManager::MakePeriodic(const vector<int> &isPeriodic, const vector<double> &L)
+{
+    // Create a periodic mesh if required
+    for (int i = 0; i < parent_mesh->Dimension(); i++) {
+        if (isPeriodic[i]) {
+            Vector translation(3);
+            for (int j = 0; j < translation.Size(); j++) { translation[j] = 0.0; }
+            translation[i] = L[i];
+            translations.push_back( translation );
+        }
+    }
+    if (translations.size() > 0) {
+        Mesh periodic_mesh = Mesh::MakePeriodic(*parent_mesh, parent_mesh->CreatePeriodicVertexMapping(translations));
+        parent_mesh.reset();
+        parent_mesh = std::make_shared<Mesh>(periodic_mesh);
+        if (!usingLocalMesh) { UseParentMesh(); }
+        // This one liner might be able to replace the first 3 lines above in the if statment
+        //parent_mesh = std::make_shared<Mesh>(Mesh::MakePeriodic(*parent_mesh, parent_mesh->CreatePeriodicVertexMapping(translations)));
+    }
+}
+
+// Function for creating a "local" mesh around a specified AR index from the parent mesh in the class
+void MeshManager::MakeLocalMesh(vector<int> central_AR_inds, int N_neighbor_layers, const vector<int> &AR_tags, const vector<vector<int>> &AR_neighbors)
+{
+    // Initiate variables
+    for (int i_aA = 0; i_aA < central_AR_inds.size(); i_aA++) {
+        AR_tags_local.push_back( AR_tags[central_AR_inds[i_aA]] );
+    }
+    central_AR_inds_local = AR_tags_local; // central_AR_inds_local is initially filled with the corresponding tags, and then replaced later with the indices
+    vector<int> AR_inds = central_AR_inds;
+    AR_inds_loc2glob = AR_inds;
+    
+    for (int i_nl = 0; i_nl < N_neighbor_layers; i_nl++) {
+        // Get the AR tags of the neighbors to the ARs in AR_inds
+        vector<int> new_AR_tags;
+        for (int i_ari = 0; i_ari < AR_inds.size(); i_ari++) {
+            new_AR_tags.insert(new_AR_tags.end(), AR_neighbors[AR_inds[i_ari]].begin(), AR_neighbors[AR_inds[i_ari]].end());
+        }
+
+        // Delete the duplicates in new_AR_tags
+        std::sort(new_AR_tags.begin(), new_AR_tags.end());
+        auto last = std::unique(new_AR_tags.begin(), new_AR_tags.end());
+        new_AR_tags.erase(last, new_AR_tags.end());
+
+        // Store new_AR_tags (i.e., the neighbor AR tags) in AR_kept, and clear AR_inds
+        AR_tags_local.insert(AR_tags_local.end(), new_AR_tags.begin(), new_AR_tags.end());
+        AR_inds.clear();
+        
+        // Get the indices of the AR tags in new_AR_tags for the next iteration
+        for (int i_art = 0; i_art < new_AR_tags.size(); i_art++) {
+            bool wasFound = false;
+            for (int i_ar = 0; i_ar < AR_tags.size(); i_ar++) {
+                if (new_AR_tags[i_art] == AR_tags[i_ar]) {
+                    AR_inds.push_back( i_ar );
+                    wasFound = true;
+                    break;
+                }
+            }
+            if (!wasFound) { cerr << "MeshManager::MakeLocalMesh(): CRITICAL ERROR: Could not find the AR index from AR tag " << new_AR_tags[i_art] << "." << endl; exit(1); }
+        }
+
+        // Store AR_inds in AR_inds_loc2glob
+        AR_inds_loc2glob.insert(AR_inds_loc2glob.end(), AR_inds.begin(), AR_inds.end());
+    }
+    
+    // Delete the duplicates in AR_kept
+    std::sort(AR_tags_local.begin(), AR_tags_local.end());
+    auto last = std::unique(AR_tags_local.begin(), AR_tags_local.end());
+    AR_tags_local.erase(last, AR_tags_local.end());
+    
+    // Delete the duplicates in AR_inds_loc2glob
+    std::sort(AR_inds_loc2glob.begin(), AR_inds_loc2glob.end());
+    auto last2 = std::unique(AR_inds_loc2glob.begin(), AR_inds_loc2glob.end());
+    AR_inds_loc2glob.erase(last2, AR_inds_loc2glob.end());
+    
+    // Record the number of AR in the local mesh
+    N_AR_local = AR_tags_local.size();
+    // Get the indices of the central AR in AR_tags_local. These are are new 'active_AR' in the solver codes
+    for (int i_cal = 0; i_cal < central_AR_inds_local.size(); i_cal++) {
+        bool wasfound = false;
+        for (int i_AR = 0; i_AR < AR_tags_local.size(); i_AR++) {
+            if (AR_tags_local[i_AR] == central_AR_inds_local[i_cal]) { central_AR_inds_local[i_cal] = i_AR; wasfound = true; break; }
+        }
+        if (!wasfound) { cerr << "mfem_util.cpp: MeshManager::MakeLocalMesh(): Could not find a tag in 'central_AR_inds_local' in 'AR_tags_local', but should be able to. Tag was: " << central_AR_inds_local[i_cal] << endl; exit(1); }
+    }
+
+    // Create the submesh with the kept ARs
+    Array<int> keep(AR_tags_local.data(), AR_tags_local.size());
+    local_mesh.reset();
+    local_mesh = std::make_shared<SubMesh>(SubMesh::CreateFromDomain(*mesh, keep));
+    
+    //return SubMesh::CreateFromDomain(*mesh, keep);
+    
+    //SubMesh smesh = SubMesh::CreateFromDomain(*mesh, keep);
+    //mesh = new Mesh(smesh);
+    //mesh = new Mesh(smesh);
+    //SubMesh *mm = &smesh;
+}
+
+// Function for clearing and reassigning variable "mesh" to the object pointed at by "parent_mesh"
+void MeshManager::UseParentMesh()
+{   
+    mesh.reset();
+    mesh = parent_mesh;
+    usingLocalMesh = false;
+}
+
+// Function for clearing and reassigning variable "mesh" to the object pointed at by "local_mesh", but as a Mesh object, not a SubMesh object
+void MeshManager::UseLocalMesh()
+{
+    mesh.reset();
+    mesh = std::make_shared<Mesh>(Mesh(*local_mesh.get()));
+    usingLocalMesh = true;
+}
+
+
+// Define functions for MPI-parallel
+#ifdef MPI_BUILD
+    // Function for creating a parallel mesh by partitioning the serial mesh (serial mesh could be periodic/local)
+    void MeshManager::MakeParallelMesh(MPI_Comm comm)
+    {
+        par_mesh = std::make_shared<ParMesh>(ParMesh(comm, *mesh));
+    }
+
+    // Function for clearing and reassigning variable "mesh" to the object pointed at by "par_mesh", but as a Mesh object, not a ParMesh object
+    //void MeshManager::UseParallelMesh()
+    //{
+    //    mesh.reset();
+    //    mesh = std::make_shared<ParMesh>(ParMesh(*par_mesh.get()));
+    //    // if (usingLocalMesh); // clear serial meshes?
+    //}
+#endif
+
+
+
+
+
+// ===============================================================
+//   Define the functions for the GridFunctionManager class.
+// ===============================================================
+// Function for loading a grid function from a file with path "gf_file_path" onto a mesh with file path "gfc_mesh_file_path"
+void GridFunctionManager::LoadGridFunction(string gf_file_path, Mesh *gf_mesh)
+{
+    // Create an ifgzstream pointer to read in the file containing the grid function
+    gf_ifgz_stream = std::make_unique<ifgzstream>(gf_file_path);
+    if (!(*gf_ifgz_stream)) {
+        cerr << "mfem_utils.cpp: GridFunctionCoefficientManager::LoadGridFunction(): CRITICAL ERROR: Unable to open grid function file. File path is: " << gf_file_path << endl;
+        exit(1);
+    }
+
+    // Define the grid function using the mesh and the stream
+    gf = std::make_shared<GridFunction>(gf_mesh, *gf_ifgz_stream);
+    
+    //gf->Save("fluid_velocity_verification_plot.gf");
+    //gf_mesh->Save("fluid_velocity_verification_mesh.mesh");
+    //exit(1);
+
+    // Save a non-const pointer to the grid function's finite element space (this is needed for some MFEM functions, like LinearForm)
+    fes = gf->FESpace();
+
+    // Load other grid function information into the class for easier manipulation later
+    UpdateGridFunctionInfo();
+}
+
+// Function for loading other grid function information into the class
+void GridFunctionManager::UpdateGridFunctionInfo()
+{
+    // Determine the name of the grid function's finite element collection 
+    const FiniteElementCollection *fec = gf->FESpace()->FEColl();
+    if (dynamic_cast<const H1_FECollection*>(fec)) { fec_name = "H1"; }
+    //else if (dynamic_cast<const DG_FECollection*>(fec)) { fec_name = "DG"; }
+    //else if (dynamic_cast<const ND_FECollection*>(fec)) { fec_name = "ND"; }
+    //else if (dynamic_cast<const RT_FECollection*>(fec)) { fec_name = "RT"; }
+    else {
+        cerr << "mfem_util.cpp: GridFunctionCoefficientManager::UpdateGridFunctionInfo(): CRITICAL ERROR: Unknown finite element collection (fec) was provided. If the fec is valid, it should be added as an option in this function. Provided fec: " << fec->Name() << endl;
+        exit(1);
+    }
+
+    // Determine the order of the grid function's finite element collection
+    fec_order = gf->FESpace()->FEColl()->GetOrder();
+
+    // Determine the dimension (vdim) of the grid function's finite element space
+    fes_dim = gf->FESpace()->GetVDim();
+}
+
+// Function for transfering the gridfunction "gf" to the local mesh provided
+void GridFunctionManager::MakeLocalGridFunction(SubMesh *local_mesh)
+{
+    // Make the local finite element collection and finite element space
+    MakeLocalFECAndFES(local_mesh);
+
+    // Make the local grid function using the local finite element space
+    gf_local = std::make_shared<GridFunction>(fes_local.get());
+    
+    // Make the transfer map for the local mesh, and map "gf" to "gf_local"
+    TransferMap map(*gf, *gf_local);
+    map.Transfer(*gf, *gf_local);
+}
+
+// Function for making a local finite element collection and finite element space for the grid function coefficient
+void GridFunctionManager::MakeLocalFECAndFES(SubMesh *local_mesh)
+{
+    // Create the finite element collection based on the class's info about the loaded grid function
+    if (fec_name == "H1") { fec_local = std::make_unique<H1_FECollection>(fec_order, local_mesh->Dimension()); }
+    else {
+        cerr << "mfem_util.cpp: GridFunctionCoefficientManager::MakeLocalFECAndFES(): CRITICAL ERROR: Unknown finite element collection (fec_name) was provided. If 'fec_name' provides a valid FEC, it should be added as an option in this function. Provided fec_name: " << fec_name << endl;
+        exit(1);
+    }
+
+    // Create the finite element space
+    fes_local = std::make_unique<FiniteElementSpace>(local_mesh, fec_local.get(), fes_dim);
+}
+
+// Function for clearing and reassigning variable "gf" to "gf_local"
+void GridFunctionManager::UseLocalGridFunction()
+{
+    gf.reset();
+    gf = gf_local;
+}
+
+
+
 
 

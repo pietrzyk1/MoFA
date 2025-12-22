@@ -35,7 +35,7 @@ link_directories(${GMSH_SOURCE_DIR}/lib)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${PROJECT_SOURCE_DIR}/bin)
 
 # Add the executable we want to build
-add_executable(generate_mesh ${PROJECT_SOURCE_DIR}/src/generate_mesh.cpp ${UTILITY_SOURCE_DIR}/src/JSON_IO.cpp ${MESH_TOOLS_SOURCE_DIR}/src/gmsh_utils.cpp)
+add_executable(generate_mesh ${PROJECT_SOURCE_DIR}/src/generate_mesh.cpp ${UTILITY_SOURCE_DIR}/src/JSON_IO.cpp ${MESH_TOOLS_SOURCE_DIR}/src/gmsh_utils.cpp ${MESH_TOOLS_SOURCE_DIR}/src/gmsh_import_STL.cpp)
 
 # Now we actually link the libraries to the executable
 target_link_libraries(generate_mesh libgmsh.so)

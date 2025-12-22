@@ -33,6 +33,7 @@ SH_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
 #############################################################################
 
 source ./config.sh
+source $BASH_UTILITY_FUNCTIONS_PATH
 
 
 
@@ -55,6 +56,37 @@ RUN_DIR="$PROJECT_DIR/output"
 
 
 #######################################################################
+#### Obtain information from the configuration and mesh info files ####
+#######################################################################
+
+# Get the path to the mesh info file from the configuration file
+MESH_INFO_DIR_KEYPATH=("mesh" "info path" "directory")
+read -r MESH_INFO_DIR < <(extract_string $MOFA_SIM_CONFIG_PATH "${MESH_INFO_DIR_KEYPATH[@]}")
+MESH_INFO_FILE_NAME_KEYPATH=("mesh" "info path" "file name")
+read -r MESH_INFO_FILE_NAME < <(extract_string $MOFA_SIM_CONFIG_PATH "${MESH_INFO_FILE_NAME_KEYPATH[@]}")
+MESH_INFO_PATH="$MESH_INFO_DIR$MESH_INFO_FILE_NAME"
+
+# Get the number of averaging regions from the mesh info file (this is for the shell script, not the solver)
+N_AR_KEYPATH=("AR" "total_number")
+read -r N_AR < <(extract_number $MESH_INFO_PATH "${N_AR_KEYPATH[@]}")
+
+# Get the maximum number of MoFA iterations from the configuration file (this is for the shell script, not the solver)
+N_ITER_KEYPATH=("scalar closure" "closure parameters" "max recursion iterations")
+read -r N_ITER < <(extract_number $MOFA_SIM_CONFIG_PATH "${N_ITER_KEYPATH[@]}")
+
+# Get "use inlet" from the configuration file, which will tell the shell script whether to do the BC closure problem or not (this is for the shell script, not the solver)
+USE_INLET_KEYPATH=("scalar closure" "simulation parameters" "use inlet")
+read -r USE_INLET < <(extract_number $MOFA_SIM_CONFIG_PATH "${USE_INLET_KEYPATH[@]}")
+
+# Get the prefix and suffix of the closure solutino output file name
+CLOSURE_FILE_NAME_PREFIX_KEYPATH=("scalar closure" "closure path" "file name prefix")
+read -r CLOSURE_FILE_NAME_PREFIX < <(extract_string $MOFA_SIM_CONFIG_PATH "${CLOSURE_FILE_NAME_PREFIX_KEYPATH[@]}")
+CLOSURE_FILE_NAME_SUFFIX_KEYPATH=("scalar closure" "closure path" "file name suffix")
+read -r CLOSURE_FILE_NAME_SUFFIX < <(extract_string $MOFA_SIM_CONFIG_PATH "${CLOSURE_FILE_NAME_SUFFIX_KEYPATH[@]}")
+
+
+
+#######################################################################
 #### Define flags, iteration parameters, and simulation parameters ####
 #######################################################################
 
@@ -70,19 +102,18 @@ FORCING_FUNCTION_FILE_NAME_FLAG="-F"
 RECURSIVE_ITER_FLAG="-I"
 
 # File names
-CLOSURE_FILE_NAME_PREFIX="chi"
 CLOSURE_FILE_NAME_PREFIX_AR="_AR"
 CLOSURE_FILE_NAME_PREFIX_BC="_BC"
 CLOSURE_FILE_ITER_ID="I"
-CLOSURE_FILE_NAME_SUFFIX=".gf"
-
-# Simulation parameters
-N_AR=10 # TODO Need to automate getting these...
-N_ITER=2
 
 # Initialize
 CONFIG_FILE_PATH_OPTION="$CONFIG_PATH_FLAG $CONFIG_FILE_PATH"
 PREVIOUS_CLOSURE_FILE_NAME=""
+
+
+# Start the timer
+SECONDS=0
+
 
 for ((i_AR = 0; i_AR < $N_AR; i_AR++))
 do
@@ -101,8 +132,7 @@ do
         RECURSIVE_ITER_OPTION="$RECURSIVE_ITER_FLAG $i_ITER"
         
         # Piece together the closure solution file name and option
-        CLOSURE_FILE_NAME_ITER_AND_END="$CLOSURE_FILE_ITER_ID$i_ITER$CLOSURE_FILE_NAME_SUFFIX"
-        CLOSURE_FILE_NAME="$CLOSURE_FILE_NAME_PREFIX$CLOSURE_FILE_NAME_PREFIX_AR$i_AR$CLOSURE_FILE_NAME_ITER_AND_END"
+        CLOSURE_FILE_NAME="$CLOSURE_FILE_NAME_PREFIX_AR$i_AR$CLOSURE_FILE_ITER_ID$i_ITER"
         CLOSURE_FILE_NAME_OPTION="$CLOSURE_PATH_FLAG $CLOSURE_FILE_NAME"
         
 
@@ -113,7 +143,7 @@ do
         ./subscripts/run_executable.sh -d $EXE_DIR -e $EXE_NAME -r $RUN_DIR -a "$RUN_ARGS"
         
         # Collect the closure file name before moving to the next iteration
-        PREVIOUS_CLOSURE_FILE_NAME="$CLOSURE_FILE_NAME"
+        PREVIOUS_CLOSURE_FILE_NAME="$CLOSURE_FILE_NAME_PREFIX$CLOSURE_FILE_NAME$CLOSURE_FILE_NAME_SUFFIX"
     done
 done
 
@@ -123,34 +153,35 @@ done
 #### Define flags, iteration parameters, and simulation parameters ####
 #######################################################################
 
-i_BC=1
+if [ $USE_INLET -eq 1 ]; then
+    i_BC=1
 
-for ((i_ITER = 0; i_ITER < $N_ITER; i_ITER++))
-do
-    # Determine whether the system will be forced by the AR forcing (if i_ITER=0) or the previous closure variable solution
-    FORCING_OPTION="$BC_FORCING_FLAG 1"
-    if [ $i_ITER -gt 0 ]; then
-        FORCING_OPTION="$FORCING_OPTION $FORCING_FUNCTION_FILE_NAME_FLAG $PREVIOUS_CLOSURE_FILE_NAME"
-    fi
-    
-    # Create the recursive iteration option
-    RECURSIVE_ITER_OPTION="$RECURSIVE_ITER_FLAG $i_ITER"
-    
-    # Piece together the closure solution file name and option
-    CLOSURE_FILE_NAME_ITER_AND_END="$CLOSURE_FILE_ITER_ID$i_ITER$CLOSURE_FILE_NAME_SUFFIX"
-    CLOSURE_FILE_NAME="$CLOSURE_FILE_NAME_PREFIX$CLOSURE_FILE_NAME_PREFIX_BC$i_BC$CLOSURE_FILE_NAME_ITER_AND_END"
-    CLOSURE_FILE_NAME_OPTION="$CLOSURE_PATH_FLAG $CLOSURE_FILE_NAME"
-    
+    for ((i_ITER = 0; i_ITER < $N_ITER; i_ITER++))
+    do
+        # Determine whether the system will be forced by the AR forcing (if i_ITER=0) or the previous closure variable solution
+        FORCING_OPTION="$BC_FORCING_FLAG 1"
+        if [ $i_ITER -gt 0 ]; then
+            FORCING_OPTION="$FORCING_OPTION $FORCING_FUNCTION_FILE_NAME_FLAG $PREVIOUS_CLOSURE_FILE_NAME"
+        fi
+        
+        # Create the recursive iteration option
+        RECURSIVE_ITER_OPTION="$RECURSIVE_ITER_FLAG $i_ITER"
+        
+        # Piece together the closure solution file name and option
+        CLOSURE_FILE_NAME="$CLOSURE_FILE_NAME_PREFIX_BC$i_BC$CLOSURE_FILE_ITER_ID$i_ITER"
+        CLOSURE_FILE_NAME_OPTION="$CLOSURE_PATH_FLAG $CLOSURE_FILE_NAME"
+        
 
-    # Put together the options to give the solver
-    RUN_ARGS="$CONFIG_FILE_PATH_OPTION $FORCING_OPTION $CLOSURE_FILE_NAME_OPTION $RECURSIVE_ITER_OPTION"
-    
-    # Call the "run_executable.sh" script
-    ./subscripts/run_executable.sh -d $EXE_DIR -e $EXE_NAME -r $RUN_DIR -a "$RUN_ARGS"
+        # Put together the options to give the solver
+        RUN_ARGS="$CONFIG_FILE_PATH_OPTION $FORCING_OPTION $CLOSURE_FILE_NAME_OPTION $RECURSIVE_ITER_OPTION"
+        
+        # Call the "run_executable.sh" script
+        ./subscripts/run_executable.sh -d $EXE_DIR -e $EXE_NAME -r $RUN_DIR -a "$RUN_ARGS"
 
-    # Collect the closure file name before moving to the next iteration
-    PREVIOUS_CLOSURE_FILE_NAME="$CLOSURE_FILE_NAME"
-done
+        # Collect the closure file name before moving to the next iteration
+        PREVIOUS_CLOSURE_FILE_NAME="$CLOSURE_FILE_NAME_PREFIX$CLOSURE_FILE_NAME$CLOSURE_FILE_NAME_SUFFIX"
+    done
+fi
 
 
 
@@ -158,9 +189,13 @@ done
 #### Exit message ####
 ######################
 
+# Stop the timer
+echo "$SH_NAME: Closure problems solved in $SECONDS seconds"
+
 # Check status
 if [ $? -eq 0 ]; then
   echo "$SH_NAME: All tasks completed successfully!"
 else
   echo "$SH_NAME: Execution failed with error code $?"
 fi
+

@@ -38,3 +38,18 @@ add_executable(transport_solver ${PROJECT_SOURCE_DIR}/src/Transport_Closure_Solv
 
 # Tell CMake to link the project's libraries to the executable. If you told CMake the directories containing the project's libraries in "link_directories", you can simply put the library names in the second argument. Otherwise, put the full path to the library file (i.e., the .a, .so, or .lib file) in the second argument.
 target_link_libraries(transport_solver libmfem.a)
+
+
+# If the OpenMP library can be found, create an executable for solving the closure problems as an ensemble using multi-threading parallelism.
+find_package(OpenMP)
+if(OpenMP_FOUND)
+    # Define USE_OPENMP, which can be used to trigger OpenMP tasks in the executable
+    add_definitions(-DUSE_OPENMP) # Tells C++ preprocessor to define the macro "USE_OPENMP"
+
+    # Add the executable for solving closure problems as an ensemble
+    add_executable(transport_solver_ensemble ${PROJECT_SOURCE_DIR}/src/Transport_Closure_Solver_Ensemble.cpp ${UTILITY_SOURCE_DIR}/src/JSON_IO.cpp ${UTILITY_SOURCE_DIR}/src/mfem_util.cpp)
+
+    # Tell CMake to link the project's libraries to the executable (this includes the link to the OpenMP library).
+    target_link_libraries(transport_solver_ensemble libmfem.a) 
+    target_link_libraries(transport_solver_ensemble OpenMP::OpenMP_CXX) # For the OpenMP library
+endif()

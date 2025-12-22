@@ -54,6 +54,9 @@ int main(int argc, char *argv[])
     
     string upscaled_dir = "./";
     string upscaled_file_name = "upscaled_c.txt";
+
+    string error_threshold_str;
+    double error_threshold = -1.0;
     
 
     // ===============================================================
@@ -65,7 +68,12 @@ int main(int argc, char *argv[])
         {
             config_path = argv[i + 1];
             cout << "Error_Calc.cpp: Configuration path obtained from parser options: " << config_path << endl;
-            break;
+        }
+        if ((string(argv[i]) == "-E" || string(argv[i]) == "--error_threshold") && i + 1 < argc)
+        {
+            error_threshold_str = argv[i + 1];
+            error_threshold = std::stod(error_threshold_str);
+            cout << "Error_Calc.cpp: Error threshold obtained from parser options: " << error_threshold << endl;
         }
     }
 
@@ -143,7 +151,6 @@ int main(int argc, char *argv[])
     vector<string> sim_keys_u = upscaled_data_info["simulation keys"];
     assert(sim_keys_p.size() == sim_keys_u.size());
 
-    
     // Get the data
     vector<JSONDict*> avg_porescale_data;
     vector<JSONDict*> upscaled_data;
@@ -167,7 +174,10 @@ int main(int argc, char *argv[])
     // ===============================================================
     double avg_p_c, up_c, abs_error;
     vector<double> avg_p_c_vec, up_c_vec;
+    vector<vector<double>> max_error_sol_time;
     vector<vector<vector<double>>> error_data;
+    bool validError = true;
+    double max_error = -1.0;
     
     for (int i_sol = 0; i_sol < N_sol_p; i_sol++)
     {
@@ -184,16 +194,38 @@ int main(int argc, char *argv[])
         }
     }
 
-    // Print the maximum error at each time step
+    // Print the maximum error in space at each time step
     for (int i_sol = 0; i_sol < N_sol_p; i_sol++)
     {
-        cout << "Maximum absolute error for solution " << i_sol << " at each time step:" << endl;
+        max_error_sol_time.push_back( vector<double>() );
+        cout << endl;
+        cout << "Maximum Absolute Error for Solution " << i_sol << " at each Time Step:" << endl;
         for (int i_step = 0; i_step < N_steps_p; i_step++)
         {
-            cout << "Time step " << to_string(i_step) << ": " << max_in_column(error_data[i_sol], i_step) << endl;
+            max_error_sol_time[i_sol].push_back( max_in_column(error_data[i_sol], i_step) );
+            cout << "Max Abs. Error in space at Time step " << i_step << ": " << max_error_sol_time[i_sol][i_step] << endl;
         }
     }
     
+    // Print the maximum error over all time steps, and all of space, for each solution
+    for (int i_sol = 0; i_sol < N_sol_p; i_sol++)
+    {
+        cout << endl;
+        auto maxIterator = std::max_element(max_error_sol_time[i_sol].begin(), max_error_sol_time[i_sol].end());
+        cout << "Max Abs. Error over Space and Time for Solution " << i_sol << ": " << *maxIterator << endl;
+
+        // Save the maximum error
+        if (max_error < *maxIterator) { max_error = *maxIterator; }
+        
+        // If error_threshold was provided in the inputs, compare the maximum error over space and time to it
+        if (error_threshold != -1.0) {
+            if (*maxIterator > error_threshold) {
+                validError = false;
+            }
+        }
+    }
+    cout << endl;
+
 
     // ===============================================================
     //   Save the computed absolute errors.
@@ -226,6 +258,23 @@ int main(int argc, char *argv[])
     //   Free the used memory by deleting the pointers.
     // ===============================================================
     
+
+    // ===============================================================
+    //   Report whether the error threshold was satisfied, if it was defined.
+    // ===============================================================
+    if (error_threshold != -1.0) {
+        if (validError) {
+            cout << "Error_Calc.cpp: main(): RESULT: Error threshold satisfied! Maximum error was " << max_error << " and error threshold was " << error_threshold << "." << endl;
+            cout << endl;
+            return 0;
+        }
+        else {
+            cerr << "Error_Calc.cpp: main(): RESULT: Error threshold not satisfied. Maximum error was " << max_error << " and error threshold was " << error_threshold << "." << endl;
+            cout << endl;
+            return 1;
+        }
+    }
+
     return 0;
 }
 
@@ -233,7 +282,7 @@ int main(int argc, char *argv[])
 
 
 
-// Function for finding the maximum in a a given column of a matrix
+// Function for finding the maximum in a given column of a matrix
 double max_in_column(const std::vector<std::vector<double>> &matrix, size_t col)
 {
     double max_val = -1;

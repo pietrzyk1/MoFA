@@ -21,6 +21,28 @@ set(MFEM_SOURCE_DIR "$ENV{HOME}/MFEM/mfem-4.8") # EDIT AS NECESSARY
 set(GMSH_SOURCE_DIR "$ENV{HOME}/gmsh/gmsh-4.13.1-Linux64-sdk") # EDIT AS NECESSARY
 
 
+########################################################
+# For Parallel Build #
+########################################################
+
+# Define whether or not the executables for MPI parallel should be built (where available) along side the serial executables.
+option(BUILD_FOR_PARALLEL "Build the executables for MPI parallel (in addition to the serial executables)" ON) # EDIT AS NECESSARY
+
+# Define a cmake variable for the Parallel-built MFEM source directory path. This will be used for all cmake files of MPI builds in the MoFA package.
+set(PAR_MFEM_SOURCE_DIR "$ENV{HOME}/MFEM/mfem-4.8_Par") # EDIT AS NECESSARY
+
+# Define cmake variables for the Hypre include and lib directory paths. This will be used for all cmake files of MPI builds in the MoFA package.
+set(HYPRE_INCLUDE_DIR "$ENV{HOME}/MFEM/hypre/src/hypre/include") # EDIT AS NECESSARY
+set(HYPRE_LIB_DIR "$ENV{HOME}/MFEM/hypre/src/hypre/lib") # EDIT AS NECESSARY
+
+# Define cmake variables for the Metis include and lib directory paths. This will be used for all cmake files of MPI builds in the MoFA package.
+set(METIS_INCLUDE_DIR "$ENV{HOME}/MFEM/metis-5.1.0/include") # EDIT AS NECESSARY
+set(METIS_LIB_DIR "$ENV{HOME}/MFEM/metis-5.1.0/lib") # EDIT AS NECESSARY
+
+
+########################################################
+# For Internal MoFA Structure #
+########################################################
 
 # Define a cmake variable for the top directory of MoFA.
 get_filename_component(cmake_SOURCE_DIR "${CMAKE_CURRENT_LIST_FILE}" PATH)

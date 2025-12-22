@@ -29,8 +29,6 @@ The MoFA methodology is advancing on multiple fronts:
 
 - Kyle Pietrzyk is extending the MoFA methodology to upscale systems with nonlinearities/nonlinear couplings.
 
-- Thomas Roy is working to run the MFEM code on the LC and run the code with ensamble and solver parallelization.
-
 - Shufan Xia is extending the MoFA methodology to the Navier-Stokes equations, applying MoFA to novel problems
 in porous/fractured media and fluid mechanics, and extending the MoFA methodology to systems with coupled fluid flow and transport.
 

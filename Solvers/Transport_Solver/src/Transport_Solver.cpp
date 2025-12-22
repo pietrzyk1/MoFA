@@ -45,7 +45,10 @@ void inlet_BC_func_X(const Vector &p, double &F);
 // Define a global "parameters struct" so that the BC functions can take in parameters
 struct Params
 {
+    string FILENAME = "Transport_Solver.cpp";
+    vector<double> L = {1., 1., 0.};
     double epsilon = 0.1;
+    double BC_frequency_scale = 1.0;
 };
 static Params globalVars; 
 
@@ -65,8 +68,10 @@ int main(int argc, char *argv[])
     
     string fluid_velocity_dir = "./";
     string fluid_velocity_file_name = "u_sol.gf";
+    string fluid_velocity_mesh_file_name = "mesh.mesh";
 
     int order = 2;
+    vector<int> isPeriodic = {0, 0, 0};
     int active_advection = 1;
     int N_steps = 5000;
     double dt = 0.00001;
@@ -76,11 +81,11 @@ int main(int argc, char *argv[])
     double omega = 1.0;
 
     string output_dir = "./";
-    string output_file_name_prefix = "c";
+    string output_file_name_prefix = "c_";
     string output_file_name_suffix = ".gf";
     
     unique_ptr<string> average_output_dir = make_unique<string>(output_dir);
-    string average_output_file_name = "avg_c.txt";
+    string average_output_file_name = "avg_sol.txt";
     vector<string> average_solution_keys = {"avg_c"};
     
     unique_ptr<string> mesh_output_dir = make_unique<string>(output_dir);
@@ -95,7 +100,7 @@ int main(int argc, char *argv[])
         if ((string(argv[i]) == "-C" || string(argv[i]) == "--config_path") && i + 1 < argc)
         {
             config_path = argv[i + 1];
-            cout << "Transport_Solver.cpp: Configuration path obtained from parser options: " << config_path << endl;
+            cout << globalVars.FILENAME << ": Configuration path obtained from parser options: " << config_path << endl;
             break;
         }
     }
@@ -129,6 +134,7 @@ int main(int argc, char *argv[])
         sub_dict = *stokes_dict["output path"];
         sub_dict.getValue("directory", fluid_velocity_dir);
         sub_dict.getValue("velocity file name", fluid_velocity_file_name);
+        sub_dict.getValue("mesh file name", fluid_velocity_mesh_file_name);
 
 
         JSONDict porescale_dict = *configData["scalar porescale"];
@@ -136,28 +142,32 @@ int main(int argc, char *argv[])
         sub_dict = *porescale_dict["simulation parameters"];
         sub_dict.getValue("order", order);
         sub_dict.getValue("active advection", active_advection);
+        sub_dict.getValue("isPeriodic", isPeriodic);
         sub_dict.getValue("N time steps", N_steps);
         sub_dict.getValue("dt", dt);
         sub_dict.getValue("output interval", output_interval);
+        sub_dict.getValue("BC frequency scale", globalVars.BC_frequency_scale);
         
         sub_dict = *porescale_dict["physical parameters"];
         sub_dict.getValue("Pe", Pe);
         sub_dict.getValue("omega", omega);
         
-        sub_dict = *porescale_dict["paths"];
-        sub_dict.getValue("output directory", output_dir);
-        sub_dict.getValue("output file name prefix", output_file_name_prefix);
-        sub_dict.getValue("output file name suffix", output_file_name_suffix);
+        sub_dict = *porescale_dict["output path"];
+        sub_dict.getValue("directory", output_dir);
+        sub_dict.getValue("file name prefix", output_file_name_prefix);
+        sub_dict.getValue("file name suffix", output_file_name_suffix);
 
-        sub_dict.getValue("average output directory", average_output_dir);
-        sub_dict.getValue("average output file name", average_output_file_name);
+        sub_dict = *porescale_dict["average output path"];
+        sub_dict.getValue("directory", average_output_dir);
+        sub_dict.getValue("file name", average_output_file_name);
         
-        sub_dict.getValue("mesh output directory", mesh_output_dir);
-        sub_dict.getValue("mesh output file name", mesh_output_file_name);
+        sub_dict = *porescale_dict["mesh output path"];
+        sub_dict.getValue("directory", mesh_output_dir);
+        sub_dict.getValue("file name", mesh_output_file_name);
     }
     else
     {
-        err << "Transport_Solver.cpp: main: Error in loading config file." << endl;
+        cerr << globalVars.FILENAME << ": main: Error in loading config file." << endl;
         return 1;
     }
 
@@ -165,6 +175,7 @@ int main(int argc, char *argv[])
     string mesh_file_path = mesh_dir + mesh_file_name;
     string mesh_info_file_path = *mesh_info_dir + mesh_info_file_name;
     string fluid_velocity_file_path = fluid_velocity_dir + fluid_velocity_file_name;
+    string fluid_velocity_mesh_file_path = fluid_velocity_dir + fluid_velocity_mesh_file_name;
     
     
     // ===============================================================
@@ -177,6 +188,7 @@ int main(int argc, char *argv[])
     //args.AddOption(&order, "-o", "--order", "Finite element order (polynomial degree) of scalar closure variable.");
     args.AddOption(&output_dir, "-O", "--output_dir", "Output directory for the pore-scale solution (use config file for more detailed file names, directories, etc.).");
     args.AddOption(&fluid_velocity_file_path, "-v", "--fluid_velocity_file_path", "Fluid velocity solution file path (best to define in the config file).");
+    args.AddOption(&fluid_velocity_mesh_file_path, "-V", "--fluid_velocity_mesh_file_path", "Fluid velocity mesh file path (best to define in the config file).");
     args.AddOption(&active_advection, "-A", "--active_advection", "Toggle whether to consider advection or not.");
     args.AddOption(&Pe, "-P", "--Peclet_Number", "Peclet Number to use.");
     args.ParseCheck();
@@ -186,15 +198,23 @@ int main(int argc, char *argv[])
     //   Get the mesh, the number of averaging regions, and the defined boundary attributes.
     // ===============================================================
     // Use the provided mesh file to define the mesh 
-    Mesh *mesh = new Mesh(mesh_file_path);
+    //Mesh *mesh = new Mesh(mesh_file_path);
     //mesh->UniformRefinement(); // Refine the mesh once uniformly
     
-    // Print the number of averaging regions defined in the mesh file (for debugging purposes)
-    cout << "Number of averaging regions: " << mesh->attributes.Max() << endl;
-
     // Get the boundary attributes for the mesh (NOTE: the provided attribute tags are 1 more than the actual Array index used to assign essential boundary conditions (SEE BELOW))
-    JSONDict mesh_info;
-    mesh_info.loadFromFile(mesh_info_file_path);
+    JSONDict mesh_info; mesh_info.loadFromFile(mesh_info_file_path);
+    vector<int> AR_tags = (*mesh_info["AR"])["tags"];
+    string avg_area_type = (*mesh_info["AR"])["area_type"];
+    globalVars.L = (*mesh_info["geometry"])["L"];
+
+    // Use the provided mesh file path to define the mesh 
+    MeshManager mesh_manager(mesh_file_path);
+    
+    // Make the mesh periodic if required by isPeriodic
+    mesh_manager.MakePeriodic(isPeriodic, globalVars.L);
+    
+    // Get a pointer to the mesh being used
+    Mesh *mesh = mesh_manager.GetMesh();
     
 
     // ===============================================================
@@ -205,50 +225,31 @@ int main(int argc, char *argv[])
     FiniteElementSpace *fespace_c = new FiniteElementSpace(mesh, fec_c, 1);
     
     // Print the number of unknowns for concentration and total
-    cout << "Number of unknowns in concentration: " << fespace_c->GetTrueVSize() << endl;
-    cout << "Number of unknowns in total: " << fespace_c->GetTrueVSize() << endl;
+    cout << globalVars.FILENAME << ": Number of unknowns in concentration: " << fespace_c->GetTrueVSize() << endl;
+    cout << globalVars.FILENAME << ": Number of unknowns in total: " << fespace_c->GetTrueVSize() << endl;
 
     
     // ===============================================================
-    //   Load Advection.
+    //   Load the fluid velocity for advection
     // ===============================================================
-    // Declare a grid function for the fluid velocity
-    GridFunction *u_gf = nullptr;
-    ifgzstream *u_ifgz_stream = nullptr;
-    FiniteElementCollection *fec_u = nullptr;
-    FiniteElementSpace *fespace_u = nullptr;
+    // Declare pointers for loading/preparing the fluid velocity grid function coefficient
+    std::unique_ptr<VectorGridFunctionCoefficientManager> fluid_velocity_vgfc_manager;
+    VectorGridFunctionCoefficient *fluid_velocity = nullptr;
     
-    // Use a previously saved gridfunction for the velocity field, or define the field as zero everywhere
+    // If advection is considered...
     if (active_advection == 1)
     {
-        // Create an ifgzstream pointer to read in the file containing the fluid velocity
-        //ifgzstream *u_ifgz_stream = NULL;
-        u_ifgz_stream = new ifgzstream(fluid_velocity_file_path);
-        if (!(*u_ifgz_stream))
-        {
-            cerr << "Transport_Closure_Solver.cpp: CRITICAL ERROR: Cannot open fluid velocity file.\n";
-            exit(1);
-        }
-
-        // Define the grid function with the fluid velocity data in the stream
-        u_gf = new GridFunction(mesh, *u_ifgz_stream);
-
-        // Scale the grid function by the Peclet number for the advection term
-        *u_gf *= Pe;
-    }
-    else
-    {
-        // Create a finite element space on which to define the grid function for the fluid velocity
-        fec_u = new H1_FECollection(order, mesh->Dimension());
-        fespace_u = new FiniteElementSpace(mesh, fec_u, mesh->Dimension());
-        u_gf = new GridFunction(fespace_u);
-        
-        // Initialize the fluid velocity as zero everywhere
-        *u_gf = 0.0;
-    }
+        // Create the fluid velocity vector grid function coefficient manager
+        cout << globalVars.FILENAME << ": Loading fluid velocity... ";
+        fluid_velocity_vgfc_manager = std::make_unique<VectorGridFunctionCoefficientManager>(fluid_velocity_file_path, fluid_velocity_mesh_file_path, Pe);
+        cout << "Complete." << endl;
     
-    // Create a VectorGridFunctionCoefficient from the gridfunction for the advection term
-    VectorGridFunctionCoefficient *fluid_velocity = new VectorGridFunctionCoefficient(u_gf);
+        // Create the fluid velocity VectorGridFunctionCoefficient
+        cout << globalVars.FILENAME << ": Creating fluid velocity VectorGridFunctionCoefficient... ";
+        fluid_velocity_vgfc_manager->MakeVectorGridFunctionCoefficient();
+        fluid_velocity = fluid_velocity_vgfc_manager->GetVectorGridFunctionCoefficient();
+        cout << "Complete." << endl;
+    }
 
 
     // ===============================================================
@@ -325,11 +326,10 @@ int main(int argc, char *argv[])
     //   Create the bilinear form for the averaging operator/forcing unknowns.
     // ===============================================================
     // Use the AveragingOperator class to obtain a matrix that can be multiplied by the solution vector to obtain the average solution in each AR
-    AveragingOperator *avgOp = new AveragingOperator(fespace_c);
+    AveragingOperator *avgOp = new AveragingOperator(fespace_c, AR_tags);
 
     // Get the AR pore areas from the averaging operator
-    Array<double> AR_pore_areas_MFEM(avgOp->GetAR_areas());
-    vector<double> AR_pore_areas(AR_pore_areas_MFEM.GetData(), AR_pore_areas_MFEM.GetData() + AR_pore_areas_MFEM.Size());
+    vector<double> AR_pore_areas(avgOp->GetAR_areas_vector());
     
     // Get the AR total areas from the mesh info and assert that there is the same number of AR pore areas
     vector<double> AR_areas = (vector<double>)(*mesh_info["AR"])["total_areas"];
@@ -366,7 +366,7 @@ int main(int argc, char *argv[])
 
     // Save the initial condition for the pore-scale and average pore-scale results
     int save_count = 0;
-    sol_BLK0_ref.Save((output_dir + output_file_name_prefix + "_" + to_string(save_count) + output_file_name_suffix).c_str());
+    sol_BLK0_ref.Save((output_dir + output_file_name_prefix + to_string(save_count) + output_file_name_suffix).c_str());
     save_count += 1;
     avgOp->ApplyAvgOperator(sol_BLK, sol_avg, porosities);
     for (int i = 0; i < sol_avg.Size(); i++) { avg_sol[i].push_back(sol_avg.Elem(i)); }
@@ -407,10 +407,13 @@ int main(int argc, char *argv[])
         if (i_step % output_interval == 0)
         {
             // Save the pore-scale solution as a gridfunction, and the average pore-scale solution in the vector structure
-            sol_BLK0_ref.Save((output_dir + output_file_name_prefix + "_" + to_string(save_count) + output_file_name_suffix).c_str());
+            sol_BLK0_ref.Save((output_dir + output_file_name_prefix + to_string(save_count) + output_file_name_suffix).c_str());
             save_count += 1;
             avgOp->ApplyAvgOperator(sol_BLK, sol_avg, porosities);
-            for (int i = 0; i < sol_avg.Size(); i++) { avg_sol[i].push_back(sol_avg.Elem(i)); }
+            for (int i = 0; i < sol_avg.Size(); i++) {
+                if (std::abs(sol_avg.Elem(i)) <= 1.0E-300) { avg_sol[i].push_back( 0.0 ); }
+                else { avg_sol[i].push_back(sol_avg.Elem(i)); }
+            }
         }
         
 
@@ -432,10 +435,7 @@ int main(int argc, char *argv[])
     // ===============================================================
     // Save the average solutions to the structure, and then the structure to a text file
     JSONDict avg_sol_struct, avg_c_struct, box_data, other_dict;
-    for (int i = 0; i < avg_sol.size(); i++)
-    {
-        box_data[to_string(i)] = avg_sol[i];
-    }
+    for (int i = 0; i < avg_sol.size(); i++) { box_data[to_string(i)] = avg_sol[i]; }
     avg_c_struct[average_solution_keys[0]] = &box_data;
     avg_sol_struct["average solutions"] = &avg_c_struct;
     
@@ -443,6 +443,8 @@ int main(int argc, char *argv[])
     other_dict["N_steps"] = (int)avg_sol[0].size();
     other_dict["N_sol"] = (int)average_solution_keys.size();
     other_dict["simulation keys"] = average_solution_keys;
+    if (avg_area_type == "AR") { other_dict["average_type"] = "superficial"; }
+    else { other_dict["average_type"] = "intrinsic"; }
     avg_sol_struct["other"] = &other_dict;
     
     avg_sol_struct.saveToFile(*average_output_dir + average_output_file_name);
@@ -464,14 +466,8 @@ int main(int argc, char *argv[])
     delete varf_cdiff;
     //delete IC;
     delete inlet_BC;
-    delete fluid_velocity;
-    delete fec_u;
-    delete fespace_u;
-    delete u_ifgz_stream;
-    delete u_gf;
     delete fespace_c;
     delete fec_c;
-    delete mesh;
     
     return 0;
 }
@@ -489,7 +485,7 @@ int main(int argc, char *argv[])
 void inlet_BC_func_T(const double &t, double &F)
 {
     double a1 = 0.5;
-    double b1 = a1 * M_PI * globalVars.epsilon * globalVars.epsilon * 0.1; // chosen to oscillate according to the maximum allowable amount (\epsilon^{-2})
+    double b1 = a1 * M_PI * globalVars.epsilon * globalVars.epsilon * globalVars.BC_frequency_scale; //* 0.75; // chosen to oscillate according to the maximum allowable amount (\epsilon^{-2})
     F = a1 - a1 * cos(t * M_PI / b1);
 }
 

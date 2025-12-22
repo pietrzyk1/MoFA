@@ -54,7 +54,7 @@ void u_no_slip_func(const Vector &p, Vector &F);
 // Define a global "parameters struct" so that the BC functions can take in parameters
 struct Params
 {
-    string FILENAME = "Stokes_Solver.cpp";
+    string FILENAME = "Stokes_Solver_p.cpp";
     vector<double> L = {1., 1., 0.};
     double u_inlet_max = 1.0;
     string sim_type = "";
@@ -65,6 +65,22 @@ static Params globalVars;
 
 int main(int argc, char *argv[])
 {
+    // ===============================================================
+    //   Initialize MPI and HYPRE
+    // ===============================================================
+    int rank = 0;
+    #ifdef MPI_BUILD
+        Mpi::Init(argc, argv);
+        //int N_ranks = Mpi::WorldSize();
+        rank = Mpi::WorldRank();
+        Hypre::Init();
+    #endif
+
+
+    // Print from each rank to the consol
+    cout << globalVars.FILENAME << ": Hello from rank " << rank << "!" << endl;
+
+
     // ===============================================================
     //   Define variables (and their default values) that can be altered by the config file and command line options
     // ===============================================================
@@ -96,12 +112,12 @@ int main(int argc, char *argv[])
     // ===============================================================
     //   Search for config file path in argv (i.e., command line options) 
     // ===============================================================
-    for (int i = 1; i < argc; i++)
-    {
-        if ((string(argv[i]) == "-C" || string(argv[i]) == "--config_path") && i + 1 < argc)
-        {
+    for (int i = 1; i < argc; i++) {
+        if ((string(argv[i]) == "-C" || string(argv[i]) == "--config_path") && i + 1 < argc) {
             config_path = argv[i + 1];
-            cout << globalVars.FILENAME << ": Configuration path obtained from parser options: " << config_path << endl;
+            if (rank == 0) {
+                cout << globalVars.FILENAME << ": Configuration path obtained from parser options: " << config_path << endl;
+            }
             break;
         }
     }
@@ -152,7 +168,7 @@ int main(int argc, char *argv[])
         sub_dict.getValue("abs tol", atol);
     }
     
-
+    
     // ===============================================================
     //   Parse command line options.
     // ===============================================================
@@ -181,6 +197,10 @@ int main(int argc, char *argv[])
     string mesh_output_path = output_dir + mesh_output_file_name; //output_dir + globalVars.sim_type + "_mesh.mesh";
     if (p_order != u_order - 1) { p_order = u_order - 1; }
     
+    // Enable hardware devices, such as GPUs, and programming models like CUDA, OCCA, RAJA, and OpenMP
+    //Device device("cpu");
+    //if (Mpi::Root()) { device.Print(); }
+
     
     // ===============================================================
     //   Get the mesh and setup periodicity.
@@ -191,27 +211,32 @@ int main(int argc, char *argv[])
     // Make the mesh periodic if required by isPeriodic
     mesh_manager.MakePeriodic(isPeriodic, globalVars.L);
     
-    // Get a pointer to the mesh being used
-    Mesh *mesh = mesh_manager.GetMesh();
+    // Make the parallel-partitioned mesh and use it
+    mesh_manager.MakeParallelMesh(MPI_COMM_WORLD);
 
+    // Get a pointer to the mesh being used
+    ParMesh *mesh = mesh_manager.GetParMesh();
     
+
     // ===============================================================
     //   Define finite element spaces for the velocity and pressure on the mesh.
     // ===============================================================
     // Finite element space for velocity
     FiniteElementCollection *fec_u = new H1_FECollection(u_order, mesh->Dimension()); // People have also used RT_FECollection
-    FiniteElementSpace *fespace_u = new FiniteElementSpace(mesh, fec_u, mesh->Dimension());
+    ParFiniteElementSpace *fespace_u = new ParFiniteElementSpace(mesh, fec_u, mesh->Dimension());
     
     // Finite element space for pressure
     FiniteElementCollection *fec_p = new H1_FECollection(p_order, mesh->Dimension()); // People have also used L2_FECollection
-    FiniteElementSpace *fespace_p = new FiniteElementSpace(mesh, fec_p, 1);
+    ParFiniteElementSpace *fespace_p = new ParFiniteElementSpace(mesh, fec_p, 1);
 
     // Print the number of unknowns for velocity, pressure, and total
-    cout << globalVars.FILENAME << ": Mesh is " << mesh->Dimension() << "D." << endl;
-    cout << globalVars.FILENAME << ": Number of unknowns in velocity: " << fespace_u->GetTrueVSize() << endl;
-    cout << globalVars.FILENAME << ": Number of unknowns in pressure: " << fespace_p->GetTrueVSize() << endl;
-    cout << globalVars.FILENAME << ": Number of unknowns in total: " << fespace_u->GetTrueVSize() + fespace_p->GetTrueVSize() << endl;
-
+    if (rank == 0) {
+        cout << globalVars.FILENAME << ": Mesh is " << mesh->Dimension() << "D." << endl;
+        cout << globalVars.FILENAME << ": Number of unknowns in velocity: " << fespace_u->TrueVSize() << endl;
+        cout << globalVars.FILENAME << ": Number of unknowns in pressure: " << fespace_p->TrueVSize() << endl;
+        cout << globalVars.FILENAME << ": Number of unknowns in total: " << fespace_u->TrueVSize() + fespace_p->TrueVSize() << endl;
+    }
+    
     
     // ===============================================================
     //   Define/Prepare boundary conditions.
@@ -239,28 +264,37 @@ int main(int argc, char *argv[])
     block_offsets[2] = fespace_p->GetVSize();
     block_offsets.PartialSum();
     
+    Array<int> block_offsets_true(3); // The argument should be the number of variables + 1
+    block_offsets_true[0] = 0;
+    block_offsets_true[1] = fespace_u->TrueVSize();
+    block_offsets_true[2] = fespace_p->TrueVSize();
+    block_offsets_true.PartialSum();
+    
 
     // ===============================================================
     //   Define the solution and right-hand-side (block) vectors and initialize them.
     // ===============================================================
+    //MemoryType mt = device.GetMemoryType();
+    //BlockVector sol_up_BLK(block_offsets, mt), b_BLK(block_offsets, mt);
+    //BlockVector sol_up_BLK_true(block_offsets_true, mt), b_BLK_true(block_offsets_true, mt);
     BlockVector sol_up_BLK(block_offsets), b_BLK(block_offsets);
-    sol_up_BLK = 0.0;
-    b_BLK = 0.0;
+    BlockVector sol_up_BLK_true(block_offsets_true), b_BLK_true(block_offsets_true);
+    sol_up_BLK = 0.0, sol_up_BLK_true = 0.0;
+    b_BLK = 0.0, b_BLK_true = 0.0;
 
     
     // ===============================================================
     //   Create the linear form.
     // ===============================================================
-    LinearForm varf_body_forc(fespace_u);
+    ParLinearForm varf_body_forc(fespace_u);
     Vector body_force_vec(const_body_force.data(), const_body_force.size());
     VectorConstantCoefficient body_force(body_force_vec);
     varf_body_forc.AddDomainIntegrator(new VectorDomainLFIntegrator(body_force));
     varf_body_forc.Assemble();
-
+    
     // Set the RHS blocks using the linear form
-    Vector &b_BLK_ref0 = b_BLK.GetBlock(0);
-    b_BLK_ref0 = varf_body_forc;
-
+    b_BLK.GetBlock(0) = varf_body_forc;
+        
 
     // ===============================================================
     //   Create the bilinear forms.
@@ -270,20 +304,20 @@ int main(int argc, char *argv[])
     //          operator in the momentum equation.
     //
     // Initiate the bilinear form of the viscous term
-    BilinearForm varf_viscous(fespace_u);
+    ParBilinearForm varf_viscous(fespace_u);
     ConstantCoefficient A_coef(A_coef_val);
     varf_viscous.AddDomainIntegrator(new VectorDiffusionIntegrator(A_coef));
     varf_viscous.Assemble();
     
     // Initiate the bilinear form of the incompressible continuity equation
-    MixedBilinearForm varf_incomp(fespace_u, fespace_p);
+    ParMixedBilinearForm varf_incomp(fespace_u, fespace_p);
     ConstantCoefficient neg_one(-1);
     varf_incomp.AddDomainIntegrator(new VectorDivergenceIntegrator(neg_one));
     varf_incomp.Assemble();
-    
+
     // Define a reference grid function to the velocity solution. This is used to edit the matrices of the bilinear forms so that the boundary conditions are applied 
-    GridFunction u_BC_apply;
-    u_BC_apply.MakeRef(fespace_u, sol_up_BLK.GetBlock(0), block_offsets[0]);
+    ParGridFunction u_BC_apply;
+    u_BC_apply.MakeRef(fespace_u, sol_up_BLK.GetBlock(0), 0);
     
     // Apply the inlet BC to both bilinear forms
     if (useInlet == 1)
@@ -307,21 +341,23 @@ int main(int argc, char *argv[])
     //   Define the block operator for the system.
     // ===============================================================
     // Initiate block operator
-    BlockOperator stokesOp_BLK(block_offsets);
+    BlockOperator stokesOp_BLK(block_offsets_true);
     
     // Initiate pointers to the sparse matrices of the bilinear forms
-    SparseMatrix &BM_viscous(varf_viscous.SpMat());
-    SparseMatrix &BM_incomp(varf_incomp.SpMat());
+    HypreParMatrix *M_viscous = NULL;
+    M_viscous = varf_viscous.ParallelAssemble();
+    HypreParMatrix *M_incomp = NULL;
+    M_incomp = varf_incomp.ParallelAssemble();
     
     // Create the transpose of the continuity equation's bilinear form (this will be the pressure gradient's block matrix for the momentum equations)
-    TransposeOperator *BM_incomp_T = NULL;
-    BM_incomp_T = new TransposeOperator(&BM_incomp);
+    TransposeOperator *M_incomp_T = NULL;
+    M_incomp_T = new TransposeOperator(M_incomp);
 
     // Set the blocks of the Stokes/incompressible continuity equation block operator
-    stokesOp_BLK.SetBlock(0, 0, &BM_viscous);
-    stokesOp_BLK.SetBlock(0, 1, BM_incomp_T);
-    stokesOp_BLK.SetBlock(1, 0, &BM_incomp);
-
+    stokesOp_BLK.SetBlock(0, 0, M_viscous);
+    stokesOp_BLK.SetBlock(0, 1, M_incomp_T);
+    stokesOp_BLK.SetBlock(1, 0, M_incomp);
+    
 
     // ===============================================================
     //   Construct the preconditioner operator.
@@ -334,30 +370,62 @@ int main(int argc, char *argv[])
     //    We use this ->      ~ [ BM_viscous  0 ] = [ BM_viscous                        0                     ]
     //                          [      0      S ]   [     0       BM_incomp diag(BM_viscous)^(-1) BM_incomp_T ]
     //
-    SaddlePointBlockPreconditioner stokesPC(block_offsets);
-    stokesPC.BuildPreconditioner(BM_viscous, BM_incomp);
+    //SaddlePointBlockPreconditioner stokesPC(block_offsets);
+    //stokesPC.BuildPreconditioner(BM_viscous, BM_incomp);
     
+    HypreParMatrix *MinvBt = NULL;
+    HypreParVector *Md = NULL;
+    HypreParMatrix *S = NULL;
+    Vector Md_PA;
+    Solver *invM, *invS;
+    
+    Md = new HypreParVector(MPI_COMM_WORLD, M_viscous->GetGlobalNumRows(), M_viscous->GetRowStarts());
+    M_viscous->GetDiag(*Md);
+
+    MinvBt = M_incomp->Transpose();
+    MinvBt->InvScaleRows(*Md);
+    S = ParMult(M_incomp, MinvBt);
+
+    //invM = new HypreDiagScale(*M_viscous);
+    //invS = new HypreBoomerAMG(*S);
+    invM = new HypreDiagScale(*M_viscous);
+    invS = new HypreSmoother(*S, 6); // 6 is for the GSSmoother
+
+    invM->iterative_mode = false;
+    invS->iterative_mode = false;
+
+    BlockDiagonalPreconditioner *stokesPC = new BlockDiagonalPreconditioner(block_offsets_true);
+    stokesPC->SetDiagonalBlock(0, invM);
+    stokesPC->SetDiagonalBlock(1, invS);
+    
+
+    // ===============================================================
+    //   For parallel, the locally constructed solution and b vectors need to be projected to the true solution vectors.
+    // ===============================================================
+    // Project the solution and b vectors to the "true" vectors, which will be used to solve the system
+    fespace_u->GetRestrictionMatrix()->Mult(sol_up_BLK.GetBlock(0), sol_up_BLK_true.GetBlock(0));
+    fespace_u->GetRestrictionMatrix()->Mult(b_BLK.GetBlock(0), b_BLK_true.GetBlock(0));
+    fespace_p->GetRestrictionMatrix()->Mult(b_BLK.GetBlock(1), b_BLK_true.GetBlock(1));
+
     
     // ===============================================================
     //   Solve the system with MINRES.
     // ===============================================================
-    MINRESSolver solver;
+    MINRESSolver solver(MPI_COMM_WORLD);
     solver.SetAbsTol(atol);
     solver.SetRelTol(rtol);
     solver.SetMaxIter(maxIter);
     solver.SetOperator(stokesOp_BLK);
-    solver.SetPreconditioner(stokesPC);
+    solver.SetPreconditioner(*stokesPC);
     solver.SetPrintLevel(1);
-    solver.Mult(b_BLK, sol_up_BLK);
+    solver.Mult(b_BLK_true, sol_up_BLK_true);
     
-    if (solver.GetConverged())
-    {
+    if (solver.GetConverged()) {
         cout << "MINRES converged in " << solver.GetNumIterations()
              << " iterations with a residual norm of "
              << solver.GetFinalNorm() << ".\n";
     }
-    else
-    {
+    else {
         cout << "MINRES did not converge in " << solver.GetNumIterations()
              << " iterations. Residual norm is " << solver.GetFinalNorm()
              << ".\n";
@@ -367,25 +435,44 @@ int main(int argc, char *argv[])
     // ===============================================================
     //   Extract and save the solutions and mesh.
     // ===============================================================
-    GridFunction u_sol(fespace_u), p_sol(fespace_p);
+    ParGridFunction u_sol, p_sol;
     
-    // Save the velocity as a vector field 
+    // Distribute the velocity true DOFs to all processors
     u_sol.MakeRef(fespace_u, sol_up_BLK.GetBlock(0), 0); // In GLVis, you can use "u" to cycle through x- and y-components
-    u_sol.Save(u_output_path.c_str());
-    // You can save vector fields by components, but if you save the vector field (like above), you can view the components by pressing "u"
+    u_sol.Distribute(&(sol_up_BLK_true.GetBlock(0)));
     
-    // Save the pressure field
+    // Distribute the pressure true DOFs to all processors
     p_sol.MakeRef(fespace_p, sol_up_BLK.GetBlock(1), 0);
-    p_sol.Save(p_output_path.c_str());
+    p_sol.Distribute(&(sol_up_BLK_true.GetBlock(1)));
 
-    // Save the mesh
-    mesh->Save(mesh_output_path.c_str());
+    {
+        // Create the file names for each rank
+        ostringstream mesh_name, u_name, p_name;
+        mesh_name << mesh_output_file_name << "." << setfill('0') << setw(6) << rank;
+        u_name << u_output_file_name << "." << setfill('0') << setw(6) << rank;
+        p_name << p_output_file_name << "." << setfill('0') << setw(6) << rank;
+
+        // Save the mesh
+        ofstream mesh_ofs((output_dir + mesh_name.str()).c_str());
+        mesh_ofs.precision(8);
+        mesh->Print(mesh_ofs);
+
+        // Save the velocity as a vector field
+        ofstream u_ofs((output_dir + u_name.str()).c_str());
+        u_ofs.precision(8);
+        u_sol.Save(u_ofs);
+
+        // Save the pressure field
+        ofstream p_ofs((output_dir + p_name.str()).c_str());
+        p_ofs.precision(8);
+        p_sol.Save(p_ofs);
+    }
 
 
     // ===============================================================
     //   Free the used memory.
     // ===============================================================
-    delete BM_incomp_T;
+    delete M_incomp_T;
     delete fespace_p;
     delete fec_p;
     delete fespace_u;

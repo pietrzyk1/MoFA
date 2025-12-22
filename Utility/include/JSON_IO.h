@@ -24,11 +24,13 @@ lL.lH.*/
 
 #include <sstream>
 #include <type_traits>
-//#include <typeinfo>
+#include <typeinfo>
+
 
 
 
 using namespace std;
+
 
 
 
@@ -101,6 +103,13 @@ struct JSONVal : JSONARGType
     }
     // Allows JSONVal variables to be assigned as a list of doubles (e.g., JSONVal a = b, where b is a vector<double>)
     JSONVal(vector<double> &list)
+    {
+        vector<JSONVal> vec;
+        for (double item : list) { vec.emplace_back(item); }
+        *this = vec;
+    }
+    // Allows JSONVal variables to be assigned as a const list of doubles (e.g., JSONVal a = b, where b is a const vector<double>)
+    JSONVal(const vector<double> &list)
     {
         vector<JSONVal> vec;
         for (double item : list) { vec.emplace_back(item); }
@@ -305,13 +314,25 @@ struct JSONDict : map<string, JSONVal>
 
 
     // Function to get string values (as a unique_ptr<string>) from a dictionary if the provided key is in the dictionary
-    void getValue(const string &key, unique_ptr<string> &external_value)
+    void getValue(const string &key, std::unique_ptr<string> &external_value)
     {
         // Check the strings
         if (*this->find(key) != *this->end())
         {
             string arg = (string)(*this)[key];
-            external_value = make_unique<string>(arg);
+            external_value = std::make_unique<string>(arg);
+            return;
+        }
+    }
+    // Function to get string values (as a shared_ptr<string>) from a dictionary if the provided key is in the dictionary
+    void getValue(const string &key, std::shared_ptr<string> &external_value)
+    {
+        // Check the strings
+        if (*this->find(key) != *this->end())
+        {
+            string arg = (string)(*this)[key];
+            external_value.reset();
+            external_value = std::make_shared<string>(arg);
             return;
         }
     }
@@ -329,7 +350,8 @@ struct JSONDict : map<string, JSONVal>
     void getValue(const string &key, vector<string> &external_value)
     {
         // Check the strings
-        if (*this->find(key) != *this->end())
+        //if (*this->find(key) != *this->end())
+        if ((*this).find(key) != (*this).end())
         {
             external_value = (vector<string>)(*this)[key];
             return;
@@ -359,7 +381,8 @@ struct JSONDict : map<string, JSONVal>
     void getValue(const string &key, vector<vector<int>> &external_value)
     {
         // Check the ints
-        if (*this->find(key) != *this->end())
+        //if (*this->find(key) != *this->end())
+        if ((*this).find(key) != (*this).end())
         {
             external_value = (vector<vector<int>>)(*this)[key];
             return;
@@ -379,7 +402,8 @@ struct JSONDict : map<string, JSONVal>
     void getValue(const string &key, vector<double> &external_value)
     {
         // Check the doubles
-        if (*this->find(key) != *this->end())
+        //if (*this->find(key) != *this->end())
+        if ((*this).find(key) != (*this).end()) // Allows for returning nothing if key is not in "this"
         {
             external_value = (vector<double>)(*this)[key];
             return;
@@ -389,13 +413,73 @@ struct JSONDict : map<string, JSONVal>
     void getValue(const string &key, JSONDict &external_value)
     {
         // Check the JSONDicts
-        if (this->find(key) != this->end())
+        //if (this->find(key) != this->end())
+        if ((*this).find(key) != (*this).end())
         {
             external_value = *(*this)[key];
             return;
         }
     }
+    void getValue(const string &key, JSONDict &external_value) const
+    {
+        // Check the JSONDicts
+        //if (this->find(key) != this->end())
+        if ((*this).find(key) != (*this).end())
+        {
+            external_value = *(*this).at(key);
+            return;
+        }
+    }
 
+
+
+
+
+    // Function for merging JSONDicts. Information in the same key path can be either
+    // overwritten or not.
+    void merge(const JSONDict &dict, bool overwrite = true)
+    {
+        // Get the keys from the current dictionary layer of "this" and the input JSONDict
+        vector<string> this_keys, dict_keys;
+        for (const auto& pair : (*this)) { this_keys.push_back(pair.first); }
+        for (const auto& pair : dict) { dict_keys.push_back(pair.first); }
+
+        // Look through the keys for a match; if a match is found,
+        // go to the next layer in the JSONDict and repeat
+        bool found_match;
+        for (const string dict_key : dict_keys)
+        {
+            found_match = false;
+            for (const string this_key : this_keys)
+            {
+                if (dict_key == this_key)
+                {
+                    found_match = true;
+                    
+                    // See if the object in each dictionary at the key are JSONDict
+                    JSONDict check_dict_this, check_dict_dict;
+                    this->getValue(this_key, check_dict_this); dict.getValue(dict_key, check_dict_dict);
+                    if (check_dict_this.size() > 0 && check_dict_dict.size() > 0)
+                    {
+                        // If both objects are JSONDict, then merge them and replace the value in "this" with the merged JSONDict
+                        check_dict_this.merge(check_dict_dict);
+                        JSONDict* check_dict_this_pntr = new JSONDict(check_dict_this);
+                        (*this)[this_key] = check_dict_this_pntr;
+                    }
+                    else
+                    {
+                        // If not, respect the overwrite option
+                        if (overwrite) { (*this)[this_key] = dict.at(dict_key); }
+                    }
+                    break;
+                }
+            }
+
+            // If no matching keys are found, merge the dict_key/associated information to this
+            if (!found_match) { (*this)[dict_key] = dict.at(dict_key); }
+        }
+    }
+    
 
 
 

@@ -50,15 +50,15 @@ extract_string()
     local file="$1"
     shift
     local -a keys=("$@")  # all remaining args are keys in order
-
+    
     local depth=0
     local max_depth=${#keys[@]}
     local line
     local -a extracted_keys
-
+    
     while IFS= read -r line; do
         # Check if current line contains expected key at current depth
-        if echo "$line" | grep -q "\"${keys[depth]}\""; then
+        if echo "$line" | grep -q "\"${keys[depth]}\":"; then
             ((++depth))
             # If we've reached last key, extract the array from this line
             if [[ $depth -eq $max_depth ]]; then

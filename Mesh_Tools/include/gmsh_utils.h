@@ -57,13 +57,18 @@ std::vector<std::vector<std::vector<std::vector<double>>>> getVolumeCoords(int v
 // Here:
 //      vol_tag: a volume tag
 
-std::vector<double> getMinMaxLineCoords(int tag);
+//std::vector<double> getMinMaxLineCoords(int tag); // Can be incorporated in getEntityMinMaxCoords (but also is not used to my knowledge...)
 // Here:
 //      tag: a line tag
 
-std::vector<double> getMinMaxSurfaceCoords(int tag);
+std::vector<double> getMinMaxSurfaceCoords(int tag); // probably no longer needed due to getEntityMinMaxCoords
 // Here:
 //      tag: a surface tag
+
+std::vector<double> getEntityMinMaxCoords(const std::pair<int, int> &dimtag);
+// Here:
+//      dimtag: an entity's dim-tag pair
+
 
 
 
@@ -97,7 +102,7 @@ bool compareValues(const double a, const double b, const double tol = 1e-6);
 //      b: a double to compare with a
 //      tol: the tolerance for double comparisons
 
-bool compareVectors(const std::vector<double> a, const std::vector<double> b, const double tol = tol_global);
+bool compareVectors(const std::vector<double> &a, const std::vector<double> &b, const double tol = tol_global);
 // Here:
 //      a: a vector of doubles to compare with vector b
 //      b: a vector of doubles to compare with vector a
@@ -162,6 +167,31 @@ bool areAdjacentEntities(const int entity_dim, const int A_tag, const int B_tag)
 //      entity_dim: the dimension of the geometric entities (i.e., 1 for lines, 2 for surfaces, 3 for volumes)
 //      A_tag: the tag of entity A
 //      B_tag: the tag of entity B
+bool areAdjacentEntities(const std::vector<std::pair<int, int>> &A_in_dimtag, const std::vector<std::pair<int, int>> &B_in_dimtag,
+    std::vector<std::pair<int, int>> &A_out_dimtag, std::vector<std::pair<int, int>> &B_out_dimtag);
+// Here:
+//      A_in_dimtag: a vector of dimension-tag pairs of A entities to get the boundaries for (i.e., this is the first entry in gmsh::model::getBoundary())
+//      B_in_dimtag: a vector of dimension-tag pairs of B entities to get the boundaries for (i.e., this is the first entry in gmsh::model::getBoundary())
+//      A_out_dimtag: a vector of dimension-tag boundary pairs of A (i.e., this is the second entry in gmsh::model::getBoundary())
+//      B_out_dimtag: a vector of dimension-tag boundary pairs of B (i.e., this is the second entry in gmsh::model::getBoundary())
+
+bool shareAnyBoundaryEntities(const int entity_dim, const int A_tag, const int B_tag);
+// Here:
+//      entity_dim: the dimension of the geometric entities (i.e., 1 for lines, 2 for surfaces, 3 for volumes)
+//      A_tag: the tag of entity A
+//      B_tag: the tag of entity B
+
+bool linesIntersect(const std::vector<std::vector<double>>& ln1, const std::vector<std::vector<double>>& ln2, double tol = 1e-10);
+// Here:
+//      ln1: a vector of 2 vectors that contain 3 doubles: the x, y, and z coordinates of the line's end points
+//      ln2: a vector of 2 vectors that contain 3 doubles: the x, y, and z coordinates of the line's end points
+//      tol: the tolerance for double comparisons
+
+bool isCollinear(const std::vector<std::vector<double>> &ln_pts, const std::vector<double> &pt, double tol = 1e-10);
+// Here:
+//      ln_pts: a vector of 2 vectors that contain 3 doubles: the x, y, and z coordinates of the line's end points
+//      pt: a vector of the x, y, and z coordinates of a point that is being checked for collinearity with the line
+//      tol: the tolerance for double comparisons
 
 
 
@@ -218,37 +248,32 @@ void load2DToolGeo(std::vector<std::pair<int, int>> &tool_sfs, std::vector<std::
 
 
 
-void MakeARMesh_Uniform2DRectangular(const int N_AR_x, const double &ell_x, const double &L_x,
-    const int N_AR_y, const double &ell_y, const double &L_y, std::vector<std::pair<int, int>> &ARs_uc,
-    std::vector<std::vector<std::vector<std::vector<double>>>> &ARs_uc_geo);
+void MakeARMesh_Uniform2DRectangular(std::vector<int> N_AR, std::vector<double> ell, std::vector<double> L,
+    std::vector<std::pair<int, int>> &ARs_uc, std::vector<std::vector<std::vector<std::vector<double>>>> &ARs_uc_geo,
+    std::vector<std::vector<int>> &AR_neighbors);
+//void MakeARMesh_Uniform2DRectangular(const int N_AR_x, const double &ell_x, const double &L_x,
+//    const int N_AR_y, const double &ell_y, const double &L_y, std::vector<std::pair<int, int>> &ARs_uc,
+//    std::vector<std::vector<std::vector<std::vector<double>>>> &ARs_uc_geo);
 // Here:
-//      N_AR_x: the number of ARs in the x-direction
-//      ell_x: the length of an AR in the x-direction
-//      L_x: the total length of the domain in the x-direction
-//      N_AR_y: the number of ARs in the y-direction
-//      ell_y: the length of an AR in the y-direction
-//      L_y: the total length of the domain in the y-direction
+//      N_AR = {N_AR_x, N_AR_y}: the number of ARs in each direction
+//      ell = {ell_x, ell_y}: the length of an AR in each direction
+//      L = {L_x, L_y}: the total length of the domain in each direction
 //      ARs_uc: an array that is filled by this function
 //      ARs_uc_geo: an array of the AR points that is filled by this function
+//      AR_neighbors: given the AR number, this variable outputs a list of AR numbers that neighbor the given AR (including diagonals)
 
-void MakeARMesh_Uniform3DRectangular(const int N_AR_x, const double &ell_x, const double &L_x,
-    const int N_AR_y, const double &ell_y, const double &L_y,
-    const int N_AR_z, const double &ell_z, const double &L_z,
-    std::vector<std::pair<int, int>> &ARs_uc,
+void MakeARMesh_Uniform3DRectangular(const std::vector<int> &N_AR, const std::vector<double> &ell,
+    const std::vector<double> &L, std::vector<std::pair<int, int>> &ARs_uc,
     std::vector<std::vector<std::vector<std::vector<std::vector<double>>>>> &ARs_uc_geo);
 // Here:
-//      N_AR_x: the number of ARs in the x-direction
-//      ell_x: the length of an AR in the x-direction
-//      L_x: the total length of the domain in the x-direction
-//      N_AR_y: the number of ARs in the y-direction
-//      ell_y: the length of an AR in the y-direction
-//      L_y: the total length of the domain in the y-direction
-//      N_AR_z: the number of ARs in the z-direction
-//      ell_z: the length of an AR in the z-direction
-//      L_z: the total length of the domain in the z-direction
+//      N_AR = {N_AR_x, N_AR_y, N_AR_z}: the number of ARs in each direction
+//      ell = {ell_x, ell_y, ell_z}: the length of an AR in each direction
+//      L = {L_x, L_y, L_z}: the total length of the domain in each direction
 //      ARs_uc: an array that is filled by this function
 //      ARs_uc_geo: an array of the AR points that is filled by this function
 
+// USING BELOW NOW
+/*
 bool createMergedARGroups(const std::vector<std::pair<int, int>> &ARs,
     double min_area_threshold, double max_AR_length, double max_AR_length_ratio,
     std::vector<std::vector<int>> &AR_tags_toBeMerged, std::vector<double> &AR_pore_space_areas);
@@ -259,11 +284,24 @@ bool createMergedARGroups(const std::vector<std::pair<int, int>> &ARs,
 //      max_AR_length_ratio: the maximum allowable ratio between AR edge lengths (i.e., how long vs. how wide an AR is)
 //      AR_tags_toBeMerged: a vector of the vectors of AR tags to be merged (i.e., {{1}, {2,3}, {4,6}, {5}, ...})
 //      AR_pore_space_areas: a vector of the merged AR areas
+*/
+bool createMergedARGroups(const std::vector<std::pair<int, int>> &ARs,
+    double min_vol_threshold, double max_AR_length, double max_AR_length_ratio,
+    std::vector<std::vector<int>> &AR_tags_toBeMerged, std::vector<double> &AR_pore_space_vols);
+// Here:
+//      ARs: a vector of surfaces that exist in the ARs after the cut. They have the form {{dim, tag}, ...}
+//      min_vol_threshold: the minimum allowable AR area/volume
+//      max_AR_length: the maximum allowable edge length of an AR
+//      max_AR_length_ratio: the maximum allowable ratio between AR edge lengths (i.e., how long vs. how wide vs. how tall an AR is)
+//      AR_tags_toBeMerged: a vector of the vectors of AR tags to be merged (i.e., {{1}, {2,3}, {4,6}, {5}, ...})
+//      AR_pore_space_vols: a vector of the merged AR areas/volumes
 
 
 
 
 
+/*
+// This funtion is no longer used. It's faster/more reliable to use getNonARInterfaceEntityTags.
 void separateARandGeometrySurfaceLines(const std::vector<std::pair<int, int>> &ARs,
     const std::vector<std::vector<std::vector<std::vector<double>>>> &tool_geo,
     std::vector<std::vector<std::pair<int, int>>> &ARs_lns,
@@ -273,7 +311,9 @@ void separateARandGeometrySurfaceLines(const std::vector<std::pair<int, int>> &A
 //      tool_geo: a nested vector of the coordinates of the cut surface points. It has indices [surface, lines for those surfaces, points in those lines, coords of those points]
 //      ARs_lns: a nested vector of: first level = AR, second level = AR boundary lines, and then the pair is {dim tag}... I think...
 //      tool_sfs_lns: a nested vector of: first level = tool surfaces, second level = surface lines, and then the pair is {dim tag}... I think...
-
+*/
+/*
+// This funtion is no longer used. It's faster/more reliable to use getNonARInterfaceEntityTags.
 void separateARandGeometryVolumeSurfaces(const std::vector<std::pair<int, int>> &ARs,
     const std::vector<std::vector<std::vector<std::vector<std::vector<double>>>>> &tool_geo_3D,
     std::vector<std::vector<std::pair<int, int>>> &ARs_srfcs,
@@ -283,3 +323,54 @@ void separateARandGeometryVolumeSurfaces(const std::vector<std::pair<int, int>> 
 //      tool_geo_3D: a nested vector of the coordinates of the cut volume points. It has indices [volume, surfaces for those volumes, lines for those surfaces, points in those lines, coords of those points]
 //      ARs_srfcs: a nested vector of: first level = AR, second level = AR boundary surfaces, and then the pair is {dim, tag}... I think...
 //      tool_vol_srfcs: a nested vector of: first level = tool volumes, second level = volume surfaces, and then the pair is {dim, tag}... I think...
+*/
+
+// Function that removes AR interface lines/surfaces from the resulting cut geometry
+void getNonARInterfaceEntityTags(const std::vector<std::pair<int, int>> &ARs,
+    std::vector<std::vector<int>> &entity_tags_in_AR, int AR_dim);
+// Here:
+//      ARs: a vector of surfaces that exist in the ARs after the cut. They have the form {{dim, tag}, ...}
+//      entity_tags_in_AR: a nested vector of: first level = AR, second level = AR interface entity tags
+//      AR_dim: the dimension of the AR (i.e., 2 for surfaces, 3 for volumes)
+
+void getPostCutTagsForLine(const std::vector<std::vector<double>> &target_ln,
+    const std::vector<std::vector<std::vector<double>>> &cut_geo_ln_coords,
+    const std::vector<int> &entity_tags_in_AR, const std::vector<double> &domain_boundaries,
+    std::vector<int> &ln_tags, std::vector<int> &skip_ind);
+// Here:
+//      target_ln: a vector of the end point coordinates of the line that we want the post-cut line tags for
+//      cut_geo_ln_coords: a nested vector that holds the end point coordinates of each post-cut line. Indices are [line, end points, x-y-z coord]
+//      entity_tags_in_AR: a vector that contains the post-cut line tags. The order of this variable corresponds to the order of lines in cut_geo_ln_coords
+//      domain_boundaries: a vector that contains the domain boundaries: {min x-coord, max x-coord, min y-coord, max y-coord}
+//      ln_tags: (output) a vector of the post-cut line tags of lines that make up the target line
+//      skip_ind: a vector of the post-cut line indices to skip during analysis (because such lines have already been determined as portions of the target line)
+
+void getToolGeoTags(const std::vector<std::vector<int>> &cut_inds,
+    const std::vector<std::vector<int>> &entity_tags_in_AR,
+    const std::vector<std::vector<std::vector<std::vector<double>>>> &tool_geo,
+    std::vector<double> domain_boundaries, std::vector<std::vector<int>> &saved_tags);
+// Here:
+//      cut_inds: Sets of pre-cut surface indices (i.e., indices of tool_geo) that are desired to be defined with a unique physical group. For example, {{2}, {3,5}} says define one
+//          physical group for surface tool_geo[2], and one physical group that contains surfaces tool_geo[3] and tool_geo[5]
+//      entity_tags_in_AR: a nested vector that contains the post-cut line tags for each AR
+//      tool_geo: a nested vector of the coordinates of the relevant surface points. It has indices [surface, lines for those surfaces, points in those lines, coords of those points]
+//      domain_boundaries: a vector of left, right, bottom, and top boundaries of the rectangular domain (assumes a rectangular domain). The notation is: {left-most x coord, right-most x coord, bottom-most y coord, top-most y coord}
+//      saved_tags: (output) a nested vector of post-cut line tags that make up the surfaces specified in cut_inds for each physical group
+
+void getDomainBoundaryLineTags(const std::vector<std::vector<int>> &ln_tags_in_AR,
+    std::vector<std::vector<int>> &domain_boundary_tags, const std::vector<std::pair<int, int>> &ARs,
+    std::vector<std::vector<int>> &AR_tags_neighbors, double L_x, double L_y, double tol = tol_global);
+// Here:
+//      ln_tags_in_AR: a nested vector of: first level = AR, second level = AR interface line tags
+//      domain_boundary_tags: a nested vector of: first level = top, bottom, left, right, and unused line tags, second level = line tags
+//      ARs: a vector gmsh formatted AR surface tags. They have the form {{dim, tag}, ...}
+//      AR_tags_neighbors: a nested vector of AR inds that touch the top, bottom, left, and right domain boundaries. First level = top, bottom, left, and right; second level = AR inds
+//      L_x: the length of the domain
+//      L_y: the height of the domain
+
+void getDomainBoundarySurfaceTags(const std::vector<std::vector<int>> &surf_tags_in_AR,
+    std::vector<std::vector<int>> &domain_boundary_tags, const std::vector<double> &L);
+// Here:
+//      surf_tags_in_AR: a nested vector of: first level = AR, second level = AR interface surface tags
+//      domain_boundary_tags: a nested vector of: first level = top, bottom, left, right, front, back, and unused surface tags, second level = surface tags
+//      L = {L_x, L_y, L_z}: the length of the domain in each direction

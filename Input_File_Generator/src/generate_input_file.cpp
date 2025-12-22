@@ -21,6 +21,7 @@ lL.lH.*/
 
 #include "JSON_IO.h"
 #include "generate_input_file_TUTORIAL.h"
+#include "generate_input_file_UNITTESTS.h"
 #if __has_include( "generate_input_file_STAGED.h" )
 #   include "generate_input_file_STAGED.h"
 #else
@@ -41,6 +42,8 @@ int main(int argc, char *argv[])
     string project_dir = "./../";
     string sim_type = "upscaled";
     string config_file_name = "MoFA_config.txt";
+    string unit_test_ID_str;
+    int unit_test_ID = 0;
     
 
     // ===============================================================
@@ -48,49 +51,48 @@ int main(int argc, char *argv[])
     // ===============================================================
     for (int i = 1; i < argc; i++)
     {
-        if ((string(argv[i]) == "-C" || string(argv[i]) == "--project_dir") && i + 1 < argc)
-        {
-            project_dir = argv[i + 1];
-            cout << "generate_input_file.cpp: Project directory obtained from parser options: " << project_dir << endl;
-        }
-        else if ((string(argv[i]) == "-t" || string(argv[i]) == "--sim_type") && i + 1 < argc)
-        {
-            sim_type = argv[i + 1];
-            cout << "generate_input_file.cpp: Simulation type obtained from parser options: " << sim_type << endl;
-        }
-        else if ((string(argv[i]) == "-F" || string(argv[i]) == "--config_file_name") && i + 1 < argc)
-        {
-            config_file_name = argv[i + 1];
-            cout << "generate_input_file.cpp: Config file name obtained from parser options: " << config_file_name << endl;
+        if ((string(argv[i]) == "-C" || string(argv[i]) == "--project_dir") && i + 1 < argc) { project_dir = argv[i + 1]; }
+        else if ((string(argv[i]) == "-t" || string(argv[i]) == "--sim_type") && i + 1 < argc) { sim_type = argv[i + 1]; }
+        else if ((string(argv[i]) == "-F" || string(argv[i]) == "--config_file_name") && i + 1 < argc) { config_file_name = argv[i + 1]; }
+        else if ((string(argv[i]) == "-U" || string(argv[i]) == "--unit_test_ID") && i + 1 < argc) {
+            unit_test_ID_str = argv[i + 1];
+            unit_test_ID = stoi(unit_test_ID_str);
         }
     }
+
+    // Print the variable values used to the consol
+    cout << "generate_input_file.cpp: Variables used:" << endl;
+    cout << "    --project_dir : " << project_dir << endl;
+    cout << "    --sim_type : " << sim_type << endl;
+    cout << "    --config_file_name : " << config_file_name << endl;
     
+    // Define the project config directory
     string project_config_dir = project_dir + "config/";
     
 
     // ===============================================================
     //   Decide which config file to create based on the input.
     // ===============================================================
-    if (sim_type == "upscaled")
-    {
-        createUpscaledConfig(project_dir, config_file_name);
+    // General config files
+    if (sim_type == "upscaled") { createUpscaledConfig(project_dir, config_file_name); }
+    else if (sim_type == "porescale") { createPorescaleConfig(project_dir, config_file_name); }
+
+    // Tutorial config files
+    else if (sim_type == "upscaled_tutorial") { createTutorialUpscaledConfig(project_dir, config_file_name); }
+    else if (sim_type == "porescale_tutorial") { createTutorialPorescaleConfig(project_dir, config_file_name); }
+
+    // Unit test config files
+    else if (sim_type == "upscaled_unit_test") {
+        cout << "    --unit_test_ID : " << unit_test_ID << endl;
+        createUnitTestUpscaledConfig(project_dir, config_file_name, unit_test_ID);
     }
-    else if (sim_type == "upscaled_tutorial")
-    {
-        createTutorialUpscaledConfig(project_dir, config_file_name);
+    else if (sim_type == "porescale_unit_test") {
+        cout << "    --unit_test_ID : " << unit_test_ID << endl;
+        createUnitTestPorescaleConfig(project_dir, config_file_name, unit_test_ID);
     }
-    else if (sim_type == "porescale")
-    {
-        createPorescaleConfig(project_dir, config_file_name);
-    }
-    else if (sim_type == "porescale_tutorial")
-    {
-        createTutorialPorescaleConfig(project_dir, config_file_name);
-    }
-    else
-    {
-        cout << "CRITICAL ERROR: generate_input_file.cpp: main: Provided 'sim_type' (i.e., the argument for '-t') not recognized. Please use '-t u' or '-t p'." << endl;
-    }
+
+    // Otherwise, error out
+    else { cout << "CRITICAL ERROR: generate_input_file.cpp: main: Provided 'sim_type' (i.e., the argument for '-t') not recognized. Please use '-t u' or '-t p'." << endl; }
 
     return 0;
 }
