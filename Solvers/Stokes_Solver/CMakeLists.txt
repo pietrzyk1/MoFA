@@ -17,6 +17,7 @@ include(${CMAKE_SOURCE_DIR}/../../cmake/Configuration_Paths.cmake)
 # Tell CMake the minimum version of CMake that it's allowed to use for building the project
 cmake_minimum_required(VERSION ${CMAKE_MIN_VERSION})
 
+
 # Tell CMake the project name and version to be built
 project(Stokes_Solver)
 
@@ -67,6 +68,6 @@ if(BUILD_FOR_PARALLEL)
         # Tell CMake any libraries to link to the project's executable (this includes the link to the MPI library). If you told CMake the directories containing the project's libraries in "link_directories", you can simply put the library names in the second argument. Otherwise, put the full path to the library file (i.e., the .a, .so, or .lib file) in the second argument.
         target_link_libraries(stokes_solver_p PRIVATE MPI::MPI_CXX libmfem.a libHYPRE.a libmetis.a)
     else()
-        message(WARNING "MPI not found: stokes_solver_p will not be created.")
+        message(WARNING "MPI not found: parallel stokes solver, stokes_solver_p, will not be created.")
     endif()
 endif()

@@ -37,14 +37,18 @@ EXE_MAIN_DIR="none"
 EXE_NAME="none"
 RUN_DIR="none"
 ARGS=""
+RUN_MODE="serial"
+N_CORES="1"
 
 # Parse options
-while getopts "d:e:r:a:" opt; do
+while getopts "d:e:r:a:m:n:" opt; do
   case $opt in
     d) EXE_MAIN_DIR=$OPTARG ;;
     e) EXE_NAME=$OPTARG ;;
     r) RUN_DIR=$OPTARG ;;
     a) ARGS=$OPTARG ;;
+    m) RUN_MODE=$OPTARG ;;
+    n) N_CORES=$OPTARG ;;
     /?) echo "Invalid option: -$OPTARG" >&2 ;;
   esac
 done
@@ -84,8 +88,28 @@ EXE_MAIN_BUILD_DIR="$EXE_MAIN_DIR/bin"
 # Go to the run directory for this executable/project
 cd $RUN_DIR
 
-# Run the executable
-$EXE_MAIN_BUILD_DIR/$EXE_NAME $ARGS
+# Decide how to call the executable
+CHOSEN=0
+echo "$SH_NAME: Recognized run mode as '$RUN_MODE'."
+if [ "$RUN_MODE" == "srun" ]; then
+    # Run the executable in parallel using srun
+    srun -n $N_CORES $EXE_MAIN_BUILD_DIR/$EXE_NAME $ARGS
+    CHOSEN=1
+fi
+if [ "$RUN_MODE" == "mpirun" ]; then
+    # Run the executable in parallel using mpirun
+    mpirun -n $N_CORES $EXE_MAIN_BUILD_DIR/$EXE_NAME $ARGS
+    CHOSEN=1
+fi
+if [ "$RUN_MODE" == "serial" ]; then
+    # Run the executable in serial
+    $EXE_MAIN_BUILD_DIR/$EXE_NAME $ARGS
+    CHOSEN=1
+fi
+if [ $CHOSEN -eq 0 ]; then
+    echo "$SH_NAME: Error: Unrecognized RUN_MODE = $RUN_MODE provided in input (via -m)"
+    exit 1
+fi
 
 # Go back to this script's directory
 cd $SH_DIR

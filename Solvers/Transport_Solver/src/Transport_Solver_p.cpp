@@ -39,6 +39,68 @@ using namespace mfem;
 
 
 
+// Declare a class for saving the solutions
+class ParSaveManager
+{
+private:
+    int N_vdofs, rank, save_count = 0;
+
+    ParGridFunction sol_gf_nonTrue;
+    Vector sol_vec_nonTrue;
+
+    string prefix, suffix, output_dir;
+    bool IsSetPrefix = false, IsSetSuffix = false, IsSetOutputDir = false;
+
+
+    // Define private class methods
+    
+    // Define a function for saving a solution vector in parallel (i.e., individual outputs for each rank)
+    void SaveParSol()
+    {
+        ostringstream sol_name;
+        sol_name << output_dir << prefix + to_string(save_count) + suffix << "." << setfill('0') << setw(6) << rank;
+        ofstream sol_ofs(sol_name.str());
+        sol_ofs.precision(8);
+        sol_gf_nonTrue.Save(sol_ofs);
+    }
+
+    // Define a function for saving a solution vector in serial (i.e., one output that combines the solutions of all ranks)
+    void SaveSerialSol(Mesh &mesh_serial)
+    {
+        // Have rank 0 save the entire serial/global solution as one gridfunction
+        ofstream sol_ofs_asone((output_dir + prefix + to_string(save_count) + suffix).c_str()); //+ ".serial").c_str());
+        GridFunction sol_serial = sol_gf_nonTrue.GetSerialGridFunction(0, mesh_serial);
+        sol_serial.Save(sol_ofs_asone);
+    }
+
+public:
+    // Define the class constructors
+    ParSaveManager(ParFiniteElementSpace *fespace, int N_vdofs_, int rank_) : N_vdofs(N_vdofs_), rank(rank_)
+    {
+        sol_vec_nonTrue = Vector(N_vdofs);
+        sol_gf_nonTrue = ParGridFunction(fespace);
+        sol_gf_nonTrue.MakeRef(fespace, sol_vec_nonTrue, 0);
+    }
+
+
+    // Define functions for setting the variables of the class
+    void SetPrefixAndSuffix(string &prefix_, string &suffix_) { SetPrefix(prefix_); SetSuffix(suffix_); }
+    void SetPrefix(string &prefix_) { prefix = prefix_; IsSetPrefix = true; }
+    void SetSuffix(string &suffix_) { suffix = suffix_; IsSetSuffix = true; }
+    void SetOutputDir(string &output_dir_) { output_dir = output_dir_; IsSetOutputDir = true; }
+    
+    // Define a function for saving a provided solution vector as a gridfunction. The solution is saved by individual ranks, as well as combined to be saved as a serial solution
+    void Save(Vector &tsol, Mesh &mesh_serial)
+    {
+        assert (IsSetPrefix && IsSetSuffix && IsSetOutputDir);
+        sol_gf_nonTrue.Distribute(tsol);
+        SaveParSol();
+        SaveSerialSol(mesh_serial);
+        save_count += 1;
+    }
+};
+
+
 // Declare BC functions. They are defined after "main".
 void inlet_BC_func_T(const double &t, double &F);
 void inlet_BC_func_X(const Vector &p, double &F);
@@ -46,17 +108,35 @@ void inlet_BC_func_X(const Vector &p, double &F);
 // Define a global "parameters struct" so that the BC functions can take in parameters
 struct Params
 {
-    string FILENAME = "Transport_Solver.cpp";
+    string FILENAME = "Transport_Solver_p.cpp";
     vector<double> L = {1., 1., 0.};
     double epsilon = 0.1;
     double BC_frequency_scale = 1.0;
 };
-static Params globalVars; 
+static Params globalVars;
+
+
+
 
 
 
 int main(int argc, char *argv[])
 {
+    // ===============================================================
+    //   Initialize MPI and HYPRE
+    // ===============================================================
+    int rank = 0;
+    #ifdef MPI_BUILD
+        Mpi::Init(argc, argv);
+        //int N_ranks = Mpi::WorldSize(); // Don't need yet
+        rank = Mpi::WorldRank();
+        Hypre::Init();
+    #endif
+
+    // Print from each rank to the consol
+    cout << globalVars.FILENAME << ": Hello from rank " << rank << "!" << endl;
+
+
     // ===============================================================
     //   Define variables (and their default values) that can be altered by the config file and command line options
     // ===============================================================
@@ -96,12 +176,10 @@ int main(int argc, char *argv[])
     // ===============================================================
     //   Search for config file path in argv (i.e., command line options) 
     // ===============================================================
-    for (int i = 1; i < argc; i++)
-    {
-        if ((string(argv[i]) == "-C" || string(argv[i]) == "--config_path") && i + 1 < argc)
-        {
+    for (int i = 1; i < argc; i++) {
+        if ((string(argv[i]) == "-C" || string(argv[i]) == "--config_path") && i + 1 < argc) {
             config_path = argv[i + 1];
-            cout << globalVars.FILENAME << ": Configuration path obtained from parser options: " << config_path << endl;
+            if (rank == 0) { cout << globalVars.FILENAME << ": Configuration path obtained from parser options: " << config_path << endl; }
             break;
         }
     }
@@ -168,9 +246,10 @@ int main(int argc, char *argv[])
     }
     else
     {
-        cerr << globalVars.FILENAME << ": main: Error in loading config file." << endl;
-        return 1;
+        cerr << globalVars.FILENAME << ": main(): CRITICAL ERROR: Could not load config file." << endl;
+        exit(1);
     }
+
 
     // Initialize paths and file names from the parts taken from the defaults (either in the variable declarations or the config file)
     string mesh_file_path = mesh_dir + mesh_file_name;
@@ -178,7 +257,7 @@ int main(int argc, char *argv[])
     string fluid_velocity_file_path = fluid_velocity_dir + fluid_velocity_file_name;
     string fluid_velocity_mesh_file_path = fluid_velocity_dir + fluid_velocity_mesh_file_name;
     
-    
+
     // ===============================================================
     //   Define the option parser and add options that can be changed from the command line
     // ===============================================================
@@ -194,76 +273,165 @@ int main(int argc, char *argv[])
     args.AddOption(&Pe, "-P", "--Peclet_Number", "Peclet Number to use.");
     args.ParseCheck();
 
+
+    // Initialize variables from parser inputs
+    if (active_advection == 1) { mesh_file_path = fluid_velocity_mesh_file_path; }
+    
     
     // ===============================================================
     //   Get the mesh, the number of averaging regions, and the defined boundary attributes.
     // ===============================================================
+    if (rank == 0) { cout << globalVars.FILENAME << ":   Obtaining mesh and mesh info... "; }
+
     // Get the boundary attributes for the mesh (NOTE: the provided attribute tags are 1 more than the actual Array index used to assign essential boundary conditions (SEE BELOW))
     JSONDict mesh_info; mesh_info.loadFromFile(mesh_info_file_path);
     vector<int> AR_tags = (*mesh_info["AR"])["tags"];
     string avg_area_type = (*mesh_info["AR"])["area_type"];
     globalVars.L = (*mesh_info["geometry"])["L"];
 
-    // Use the provided mesh file path to define the mesh 
+    
+    // Use the provided mesh file path to define the mesh
     MeshManager mesh_manager(mesh_file_path);
     
     // Make the mesh periodic if required by isPeriodic
     mesh_manager.MakePeriodic(isPeriodic, globalVars.L);
     
+    // Make the parallel-partitioned mesh and use it
+    mesh_manager.MakeParallelMesh(MPI_COMM_WORLD);
+
     // Get a pointer to the mesh being used
-    Mesh *mesh = mesh_manager.GetMesh();
+    ParMesh *mesh = mesh_manager.GetParMesh();
+
+    if (rank == 0) {
+        cout << "Complete." << endl;
+        cout << globalVars.FILENAME << ":   Mesh is " << mesh->Dimension() << "D." << endl;
+    }
     
 
     // ===============================================================
-    //   Define finite element spaces for the concentration.
+    //   Save the ParMeshes and a serial version of the global mesh.
     // ===============================================================
+    {
+        // Create the file names for each rank
+        ostringstream mesh_name;
+        mesh_name << mesh_output_file_name << "." << setfill('0') << setw(6) << rank;
+
+        // Have each rank save their ParMesh
+        ofstream mesh_ofs((output_dir + mesh_name.str()).c_str());
+        mesh_ofs.precision(8);
+        mesh->Print(mesh_ofs);
+    }
+
+    // Have rank 0 also save the entire serial/global mesh for 
+    Mesh mesh_serial = mesh->GetSerialMesh(0);
+    ofstream mesh_out((output_dir + mesh_output_file_name).c_str()); //+ ".serial").c_str());
+    mesh_serial.Print(mesh_out);
+
+
+    // ===============================================================
+    //   Define the finite element space for the concentration.
+    // ===============================================================
+    if (rank == 0) { cout << globalVars.FILENAME << ":   Defining finite element spaces... "; }
+
     // Finite element space for concentration
     FiniteElementCollection *fec_c = new H1_FECollection(order, mesh->Dimension());
-    FiniteElementSpace *fespace_c = new FiniteElementSpace(mesh, fec_c, 1);
+    ParFiniteElementSpace *fespace_c = new ParFiniteElementSpace(mesh, fec_c, 1);
     
-    // Print the number of unknowns for concentration and total
-    cout << globalVars.FILENAME << ": Number of unknowns in concentration: " << fespace_c->GetTrueVSize() << endl;
-    cout << globalVars.FILENAME << ": Number of unknowns in total: " << fespace_c->GetTrueVSize() << endl;
+    if (rank == 0) {
+        cout << "Complete." << endl;
+        
+        // Print the number of unknowns for concentration and total
+        cout << globalVars.FILENAME << ":   Rank 0 number of concentration unknowns: " << fespace_c->GetTrueVSize() << endl;
+        cout << globalVars.FILENAME << ":   Rank 0 number of unknowns in total: " << fespace_c->GetTrueVSize() << endl;
+        //#ifdef MPI_BUILD
+        //    cout << globalVars.FILENAME << ":   Global number of concentration unknowns: " << fespace_c->GlobalTrueVSize() << endl;
+        //    cout << globalVars.FILENAME << ":   Global number of unknowns in total: " << fespace_c->GlobalTrueVSize() << endl;
+        //#endif
+    }
 
-    
+
     // ===============================================================
     //   Load the fluid velocity for advection
     // ===============================================================
     // Declare pointers for loading/preparing the fluid velocity grid function coefficient
     std::unique_ptr<VectorGridFunctionCoefficientManager> fluid_velocity_vgfc_manager;
     VectorGridFunctionCoefficient *fluid_velocity = nullptr;
-    
+
     // If advection is considered...
     if (active_advection == 1)
     {
         // Create the fluid velocity vector grid function coefficient manager
-        cout << globalVars.FILENAME << ": Loading fluid velocity... ";
+        if (rank == 0) { cout << globalVars.FILENAME << ":   Loading fluid velocity... "; }
         fluid_velocity_vgfc_manager = std::make_unique<VectorGridFunctionCoefficientManager>(fluid_velocity_file_path, fluid_velocity_mesh_file_path, Pe);
-        cout << "Complete." << endl;
+        if (rank == 0) { cout << "Complete." << endl; }
     
         // Create the fluid velocity VectorGridFunctionCoefficient
-        cout << globalVars.FILENAME << ": Creating fluid velocity VectorGridFunctionCoefficient... ";
-        fluid_velocity_vgfc_manager->MakeVectorGridFunctionCoefficient();
+        if (rank == 0) { cout << globalVars.FILENAME << ":   Creating fluid velocity VectorGridFunctionCoefficient... "; }
+        fluid_velocity_vgfc_manager->MakeParGridFunction(mesh, mesh_manager.GetPartitioning());
+        fluid_velocity_vgfc_manager->MakeParVectorGridFunctionCoefficient();
         fluid_velocity = fluid_velocity_vgfc_manager->GetVectorGridFunctionCoefficient();
-        cout << "Complete." << endl;
-    }
+        if (rank == 0) { cout << "Complete." << endl; }
+        
+        /*
+        // For debugging
+        GridFunction u_gf_save(fluid_velocity_vgfc_manager->GetParGridFunctionFES());
+        u_gf_save = 0.0;
+        u_gf_save.ProjectCoefficient(*fluid_velocity);
+        u_gf_save.Save(("fluid_velocity_verification_plot" + to_string(rank) + ".gf").c_str());
+        
+        ostringstream mesh_name2;
+        mesh_name2 << mesh_output_file_name << "2." << setfill('0') << setw(6) << rank;
+        ofstream mesh_ofs2(mesh_name2.str());
+        mesh_ofs2.precision(8);
+        mesh->Print(mesh_ofs2);
+        exit(1);
+        */
+        /*
+        // For debugging
+        //GridFunction u_gf_save(fluid_velocity_vgfc_manager->GetGridFunctionFES());
+        //u_gf_save = 0.0;
+        //u_gf_save.ProjectCoefficient(*fluid_velocity);
 
+        //int* partitioning2 = mesh_manager.GetPartitioning(); //fluid_velocity_vgfc_manager->GetGridFunctionMesh()->GeneratePartitioning(Mpi::WorldSize());
+        //ParMesh par_mesh_test(MPI_COMM_WORLD, *fluid_velocity_vgfc_manager->GetGridFunctionMesh(), partitioning2);
+        
+        //ParGridFunction kp; //(&par_mesh_test, &u_gf_save, partitioning2); // mesh_manager.GetPartitioning());
+        //kp = ParGridFunction(&par_mesh_test, &u_gf_save, partitioning2);
+        //kp.Save(("fluid_velocity_verification_plot" + to_string(rank) + ".gf").c_str());
+        
+        
+        //ostringstream mesh_name;
+        //mesh_name << mesh_output_file_name << "." << setfill('0') << setw(6) << rank;
+        //ofstream mesh_ofs(mesh_name.str());
+        //mesh_ofs.precision(8);
+        //fluid_velocity_vgfc_manager->GetGridFunctionMesh()->Print(mesh_ofs);
+        //ParMesh par_mesh_test(MPI_COMM_WORLD, *fluid_velocity_vgfc_manager->GetGridFunctionMesh(), mesh_manager.GetPartitioning());
+        //par_mesh_test.Print(mesh_ofs);
+        */
+    }
+    
 
     // ===============================================================
     //   Define/Prepare boundary conditions.
     // ===============================================================
+    if (rank == 0) { cout << globalVars.FILENAME << ":   Defining boundary condition functions... "; }
+
     // Here, we are defining two marker arrays to mark 1.) the inlet, and 2.) the outlet.
     Array<int> marker_inlet_BC(mesh->bdr_attributes.Max()); // Define a marker array for the inlet BC
     marker_inlet_BC = 0; // Initialize marker array to "don't apply any essential BC"
     marker_inlet_BC[(int)(*mesh_info["scalar_closure"])["inlet1"] - 1] = 1; // Set the first bdr attr group (i.e., physical group defined as 1 in gmsh file) as being the inlet
-    DirichlettBC *inlet_BC = new DirichlettBC(*fespace_c, marker_inlet_BC);
+    ParDirichlettBC *inlet_BC = new ParDirichlettBC(marker_inlet_BC);
     inlet_BC->SetTemporallyDependentFunction( inlet_BC_func_T );
     inlet_BC->SetSpatiallyDependentFunction( inlet_BC_func_X );
+
+    if (rank == 0) { cout << "Complete." << endl; }
     
 
     // ===============================================================
     //   Define block structure of the system.
     // ===============================================================
+    if (rank == 0) { cout << globalVars.FILENAME << ":   Defining the block system structure... "; }
+
     // Notes: - This defines an array of offsets for each variable. The last component of the Array is the sum of the dimensions
     //          of each block.
     Array<int> block_offsets(2); // The argument should be the number of variables + 1
@@ -271,191 +439,138 @@ int main(int argc, char *argv[])
     block_offsets[1] = fespace_c->GetVSize();
     block_offsets.PartialSum();
     
+    Array<int> block_offsets_true(2); // The argument should be the number of variables + 1
+    block_offsets_true[0] = 0;
+    block_offsets_true[1] = fespace_c->GetTrueVSize();
+    block_offsets_true.PartialSum();
+
+    if (rank == 0) { cout << "Complete." << endl; }
+    
 
     // ===============================================================
     //   Define the solution and right-hand-side (block) vectors and initialize them.
     // ===============================================================
+    if (rank == 0) { cout << globalVars.FILENAME << ":   Initializing the solution vector and RHS vector... "; }
+
     BlockVector sol_BLK(block_offsets), b_BLK(block_offsets);
-    sol_BLK = 0.0;
-    b_BLK = 0.0;
+    BlockVector sol_BLK_true(block_offsets_true), b_BLK_true(block_offsets_true);
+    sol_BLK = 0.0; sol_BLK_true = 0.0;
+    b_BLK = 0.0; b_BLK_true = 0.0;
     
     // Make references grid functions to the various dependent variables in the block solution. NOTE: Editing these gridfunctions will edit the block solutions
-    GridFunction sol_BLK0_ref, b_BLK0_ref;
-    sol_BLK0_ref.MakeRef(fespace_c, sol_BLK.GetBlock(0), block_offsets[0]);
-    b_BLK0_ref.MakeRef(fespace_c, b_BLK.GetBlock(0), block_offsets[0]);
+    ParGridFunction sol_BLK0_ref, b_BLK0_ref;
+    sol_BLK0_ref.MakeRef(fespace_c, sol_BLK.GetBlock(0), 0);
+    b_BLK0_ref.MakeRef(fespace_c, b_BLK.GetBlock(0), 0);
     
-    // Use the reference grid functions to project the initial conditions
-    //InitialCondition *IC = new InitialCondition();
-    //sol_BLK0_ref.ProjectCoefficient(*IC);
+    if (rank == 0) { cout << "Complete." << endl; }
 
 
     // ===============================================================
-    //   Create the bilinear form for the diffusion term.
+    //   Create the bilinear forms.
     // ===============================================================
-    // Initiate the bilinear form of the diffusion term
-    BilinearForm *varf_cdiff(new BilinearForm(fespace_c));
+    if (rank == 0) { cout << globalVars.FILENAME << ":   Assembling bilinear forms, and stiffness and mass matrices... "; }
+
+    // Create the bilinear form of the diffusion term
+    ParBilinearForm *varf_cdiff(new ParBilinearForm(fespace_c));
     varf_cdiff->AddDomainIntegrator(new DiffusionIntegrator);
     if (active_advection == 1) { varf_cdiff->AddDomainIntegrator(new ConvectionIntegrator(*fluid_velocity)); }
     varf_cdiff->Assemble();
-    
-    // Before eliminating the rows and cols for the essential BCs, use the variational form to get a matrix for the vdofs that the BC affects
-    inlet_BC->SetOperator(*varf_cdiff);
-
-    // Apply the inlet BC to the diffusion bilinear form
-    varf_cdiff->EliminateEssentialBC(marker_inlet_BC); // Sets the rows and cols in "varf_viscous" corresponding to DOFs marked by "marker_inlet_BC" to 0.0 and assigns a diagonal as 1.0. Then, for the same rows, sets the components of b_BLK to those of c_ref (if given this input).
-    
-    // Finish the bilinear form by "finalizing"
     varf_cdiff->Finalize();
 
+    // Get the Hypre matrix of the bilinear form for diffusion, and set the inlet BC operator with the diffusion Hypre matrix
+    HypreParMatrix *M_cdiff = varf_cdiff->ParallelAssemble();
+    inlet_BC->SetOperator(*M_cdiff, *varf_cdiff);
+    
 
-    // ===============================================================
-    //   Create the bilinear form for the mass matrix.
-    // ===============================================================
-    // Initiate the bilinear form of the mass matrix
-    BilinearForm *varf_mass(new BilinearForm(fespace_c));
+    // Create the bilinear form of the mass matrix
+    ParBilinearForm *varf_mass(new ParBilinearForm(fespace_c));
     ConstantCoefficient dimlessTimeScale(omega);
     varf_mass->AddDomainIntegrator(new MassIntegrator(dimlessTimeScale));
     varf_mass->Assemble();
-    // varf_cdiff->EliminateEssentialBC(marker_inlet_BC, Operator::DIAG_ONE); // This might need to be here
     varf_mass->Finalize();
-    
-    
-    // ===============================================================
-    //   Create the bilinear form for the averaging operator/forcing unknowns.
-    // ===============================================================
-    // Use the AveragingOperator class to obtain a matrix that can be multiplied by the solution vector to obtain the average solution in each AR
-    AveragingOperator *avgOp = new AveragingOperator(fespace_c, AR_tags);
 
-    // Get the AR pore areas from the averaging operator
-    vector<double> AR_pore_areas(avgOp->GetAR_areas_vector());
+    // Get the Hypre matrix of the bilinear form for "mass", or the time derivative
+    HypreParMatrix *M_mass = varf_mass->ParallelAssemble();
     
-    // Get the AR total areas from the mesh info and assert that there is the same number of AR pore areas
-    vector<double> AR_areas = (vector<double>)(*mesh_info["AR"])["total_areas"];
-    assert(AR_areas.size() == AR_pore_areas.size());
-
-    // Compute the porosities
-    vector<double> porosities;
-    AveragingOperator::ComputePorosities(AR_pore_areas, AR_areas, porosities);    
+    if (rank == 0) { cout << "Complete." << endl; }
     
     
     // ===============================================================
     //   Solve the system in time.
     // ===============================================================
     double t = 0.0;
+    int save_count = 0;
     
-    // Initiate pointers to the sparse matrices of the diffusion bilinear form and mass matrix bilinear form
-    SparseMatrix &BM_cdiff(varf_cdiff->SpMat()), &BM_mass(varf_mass->SpMat());
-
     // Define the time stepping operator for ODE systems of the form   M * du/dt + K * u = b, and set the initial time
-    LinearTimeDependentOperator oper(BM_mass, BM_cdiff, b_BLK, dt);
+    ParLinearTimeDependentOperator oper(*M_mass, *M_cdiff, b_BLK_true, dt, MPI_COMM_WORLD);
     oper.PrepareImplicitEuler();
     //oper.PrepareExplicitEuler();
     oper.SetTime(t);
     
-    // Initialize the vectors for saving the average solutions
-    Vector sol_avg(avgOp->GetNAR()); // For interfacing with MFEM entities
-    vector<vector<double>> avg_sol; for (int i = 0; i < sol_avg.Size(); i++) { avg_sol.push_back({}); } // For saving the avg solution in time. Should be avg_sol[i_AR, i_timestep]
-    
     // Initialize block vector for hosting the solution
     BlockVector du_dt(block_offsets), delta_u(block_offsets);
-    du_dt = 0.0;
-    delta_u = 0.0;
+    BlockVector du_dt_true(block_offsets_true), delta_u_true(block_offsets_true);
+    du_dt = 0.0; delta_u = 0.0; du_dt_true = 0.0; delta_u_true = 0.0;
 
 
-    // Save the initial condition for the pore-scale and average pore-scale results
-    int save_count = 0;
-    sol_BLK0_ref.Save((output_dir + output_file_name_prefix + to_string(save_count) + output_file_name_suffix).c_str());
-    save_count += 1;
-    avgOp->ApplyAvgOperator(sol_BLK, sol_avg, porosities);
-    for (int i = 0; i < sol_avg.Size(); i++) { avg_sol[i].push_back(sol_avg.Elem(i)); }
+    // Initialize the manager for saving the solution in parallel
+    ParSaveManager saver(fespace_c, sol_BLK.GetBlock(0).Size(), rank);
+    saver.SetPrefixAndSuffix(output_file_name_prefix, output_file_name_suffix);
+    saver.SetOutputDir(output_dir);
+    
+    // Save the initial condition in both parallel and serial formats
+    saver.Save(sol_BLK_true.GetBlock(0), mesh_serial);
 
-
-    StopWatch timer;
+    
     // Start the time loop
     for (int i_step = 1; i_step < N_steps + 1; i_step++)
     {
         // Increase the time and print the step
         t += dt;
-        cout << "Time step: " << i_step << ", Time: " << t << endl;
-        
-        
+        if (rank == 0) { cout << "Time step: " << i_step << ", Time: " << t << endl; }        
+
         // Reset the RHS/b-vector
-        b_BLK = 0.0;
+        b_BLK_true = 0.0;
         
-        // // Set the time on the inlet/source boundary condition and project the boundary condition to the
-        // appropriate entries of sol_BLK through sol_BLK0_ref, and to those of b_BLK through b_BLK0_ref.
-        // This sets the solution to the BC at the correct places.
+        // Set the time on the inlet/source boundary condition
         inlet_BC->SetTime(t);
-        inlet_BC->ProjectToGridFunction(sol_BLK0_ref);
-        inlet_BC->ProjectToGridFunction(b_BLK0_ref);
-        // Update the peripheral vdofs in the b vector (i.e., the vdofs that are affected by the Dirichlett BC). Note, this ADDS the contribution to b_BLK; it does not rewrite the entries
-        inlet_BC->UpdateLinearFormVector(sol_BLK, b_BLK);
         
+        // Project the boundary condition to the solution vector sol_BLK through sol_BLK0_ref
+        inlet_BC->ProjectToGridFunction(sol_BLK0_ref);
+        
+        // Project the solution vector to the "true" solution vector, which will be used to solve the system
+        fespace_c->GetRestrictionMatrix()->Mult(sol_BLK.GetBlock(0), sol_BLK_true.GetBlock(0));
+        
+        // Update the peripheral true vdofs in the b vector (i.e., the true vdofs that are affected by the Dirichlett BC). Note, this ADDS the contribution to b_BLK_true; it does not rewrite the entries
+        inlet_BC->UpdateLinearFormVector(sol_BLK_true.GetBlock(0), b_BLK_true.GetBlock(0));
+
         // Apply operator to solve for the time derivative
         //oper.Mult(sol_BLK, du_dt);
-        oper.ImplicitSolve(dt, sol_BLK, du_dt);
+        oper.ImplicitSolve(dt, sol_BLK_true, du_dt_true);
         
         // Multiply derivative by dt and add to solution to get the solution at the next time step
-        delta_u = du_dt;
-        delta_u *= dt;
-        sol_BLK += delta_u;
+        delta_u_true = du_dt_true;
+        delta_u_true *= dt;
+        sol_BLK_true.GetBlock(0) += delta_u_true;
+
+        // The solution is obtained for the true-DOF-representation. This needs to be distributed to the non-true-DOF-representation on each rank
+        sol_BLK0_ref.Distribute(&(sol_BLK_true.GetBlock(0)));
 
 
         // Save the solution if required
-        if (i_step % output_interval == 0)
-        {
-            // Save the pore-scale solution as a gridfunction, and the average pore-scale solution in the vector structure
-            sol_BLK0_ref.Save((output_dir + output_file_name_prefix + to_string(save_count) + output_file_name_suffix).c_str());
-            save_count += 1;
-            avgOp->ApplyAvgOperator(sol_BLK, sol_avg, porosities);
-            for (int i = 0; i < sol_avg.Size(); i++) {
-                if (std::abs(sol_avg.Elem(i)) <= 1.0E-300) { avg_sol[i].push_back( 0.0 ); }
-                else { avg_sol[i].push_back(sol_avg.Elem(i)); }
-            }
+        if (i_step % output_interval == 0) {
+            // Save the pore-scale solution in parallel and serial formats
+            saver.Save(sol_BLK_true.GetBlock(0), mesh_serial);
         }
-        
 
-        // Print the maximum value to the consol (for debugging purposes...)
-        cout << "Max c: " << sol_BLK.GetBlock(0).Max() << endl;
+
+        // Print the value of the BC's time-dependent portion to the consol (for debugging purposes)
+        if (rank == 0) {
+            double BC_val;
+            inlet_BC_func_T(t, BC_val);
+            cout << "BC val: " << BC_val << endl;
+        }
     }
-
-    // Print the final average solutions (for debugging purposes...)
-    avgOp->ApplyAvgOperator(sol_BLK, sol_avg, porosities);
-    cout << "The averaged concentrations :" << endl;
-    for (int i = 0; i < sol_avg.Size(); i++)
-    {
-        cout << sol_avg.Elem(i) << endl;
-    }
-
-
-    // ===============================================================
-    //   Save the solutions and mesh.
-    // ===============================================================
-    // Save the average solutions to the structure, and then the structure to a text file
-    JSONDict avg_sol_struct, avg_c_struct, box_data, other_dict;
-    for (int i = 0; i < avg_sol.size(); i++) { box_data[to_string(i)] = avg_sol[i]; }
-    avg_c_struct[average_solution_keys[0]] = &box_data;
-    avg_sol_struct["average solutions"] = &avg_c_struct;
-    
-    other_dict["N_AR"] = (int)avg_sol.size();
-    other_dict["N_steps"] = (int)avg_sol[0].size();
-    other_dict["N_sol"] = (int)average_solution_keys.size();
-    other_dict["simulation keys"] = average_solution_keys;
-    if (avg_area_type == "AR") { other_dict["average_type"] = "superficial"; }
-    else { other_dict["average_type"] = "intrinsic"; }
-    avg_sol_struct["other"] = &other_dict;
-    
-    avg_sol_struct.saveToFile(average_output_dir + average_output_file_name);
-
-    
-    // Save the AR pore areas back to the mesh info file
-    JSONDict AR_dict_temp = *mesh_info["AR"];
-    AR_dict_temp["pore_areas"] = AR_pore_areas;
-    mesh_info["AR"] = &AR_dict_temp;
-    mesh_info.saveToFile(mesh_info_file_path);
-    
-    // Save the mesh
-    mesh->Save(mesh_output_dir + mesh_output_file_name);
 
 
     // ===============================================================
@@ -466,6 +581,12 @@ int main(int argc, char *argv[])
     delete inlet_BC;
     delete fespace_c;
     delete fec_c;
+
+    
+    // ===============================================================
+    //   Finalize the MPI and exit.
+    // ===============================================================
+    MPI_Finalize();
     
     return 0;
 }

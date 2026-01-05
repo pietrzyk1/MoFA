@@ -285,16 +285,21 @@ int main(int argc, char *argv[])
     GridFunction u_BC_apply;
     u_BC_apply.MakeRef(fespace_u, sol_up_BLK.GetBlock(0), block_offsets[0]);
     
+    // Apply the inlet, and then no-slip (order gives priority to no-slip for points defined at BC intersections)
+    if (useInlet == 1) { u_BC_apply.ProjectBdrCoefficient(inlet_BC, marker_inlet_BC); }
+    u_BC_apply.ProjectBdrCoefficient(no_slip_BC, marker_no_slip_BC);
+    
     // Apply the inlet BC to both bilinear forms
-    if (useInlet == 1)
-    {
-        u_BC_apply.ProjectCoefficient(inlet_BC);
+    if (useInlet == 1) {
+        //u_BC_apply.ProjectCoefficient(inlet_BC);
+        //u_BC_apply.ProjectBdrCoefficient(inlet_BC, marker_inlet_BC);
         varf_viscous.EliminateEssentialBC(marker_inlet_BC, u_BC_apply, b_BLK.GetBlock(0)); // Sets the rows in "varf_viscous" corresponding to DOFs marked by "marker_inlet_BC" to 0.0 and assigns a diagonal as 1.0. Then, for the same rows, sets the components of b_BLK to those of u_BC_apply.
         varf_incomp.EliminateTrialEssentialBC(marker_inlet_BC, u_BC_apply, b_BLK.GetBlock(1)); // Sets the columns in "varf_viscous" corresponding to DOFs marked by "marker_inlet_BC" to 0.0. If zeroed components were non-zero, it multiplies those components by u_BC_apply and subtracts them from b_BLK.
     }
 
     // Apply the no-slip condition to both bilinear forms
-    u_BC_apply.ProjectCoefficient(no_slip_BC);
+    //u_BC_apply.ProjectCoefficient(no_slip_BC);
+    //u_BC_apply.ProjectBdrCoefficient(no_slip_BC, marker_no_slip_BC);
     varf_viscous.EliminateEssentialBC(marker_no_slip_BC, u_BC_apply, b_BLK.GetBlock(0));
     varf_incomp.EliminateTrialEssentialBC(marker_no_slip_BC, u_BC_apply, b_BLK.GetBlock(1));
     
@@ -350,14 +355,12 @@ int main(int argc, char *argv[])
     solver.SetPrintLevel(1);
     solver.Mult(b_BLK, sol_up_BLK);
     
-    if (solver.GetConverged())
-    {
+    if (solver.GetConverged()) {
         cout << "MINRES converged in " << solver.GetNumIterations()
              << " iterations with a residual norm of "
              << solver.GetFinalNorm() << ".\n";
     }
-    else
-    {
+    else {
         cout << "MINRES did not converge in " << solver.GetNumIterations()
              << " iterations. Residual norm is " << solver.GetFinalNorm()
              << ".\n";

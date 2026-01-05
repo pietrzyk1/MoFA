@@ -316,7 +316,7 @@ void createTutorialPorescaleConfig(string &project_dir, string &config_file_name
     // The following options toggle whether to merge the newly created ARs with an adjacent "host" AR if 1.) the newly create ARs have a small area, 2.) the resulting
     // merged AR does not become too big, and 3.) the resulting merged AR does not have a large length-width ratio.
     meshDict_AR["merge ARs"] = 0; // Toggle whether merging averaging regions is allowed. 0 = No, 1 = Yes
-    meshDict_AR["min area threshold"] = 0.2; // Declare the minimum area an AR can have without merging
+    meshDict_AR["min area threshold"] = 0.002; // Declare the minimum area an AR can have without merging
     meshDict_AR["max AR length"] = 1.75; // Declare the maximum length a resulting merged AR can have
     meshDict_AR["max AR length ratio"] = 2.0; // Declare the maximum length-width ratio a resulting merged AR can have
     meshDict["AR"] = &meshDict_AR;

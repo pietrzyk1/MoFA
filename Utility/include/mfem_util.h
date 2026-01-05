@@ -65,10 +65,9 @@ public:
         // Get an array, vdofs_marker, that is -1 for vdofs that are part of the BC, and 0 for vdofs that are not
         Array<int> vdofs_marker;
         fespace.GetEssentialVDofs(attr_marker, vdofs_marker);
-
+        
         // Use vdofs_marker to get the indices for marked and unmarked vdofs
-        for(int i = 0; i < vdofs_marker.Size(); i++)
-        {
+        for(int i = 0; i < vdofs_marker.Size(); i++) {
             if (vdofs_marker[i] == -1) { marked_ind.Append(i); }
             else { unmarked_ind.Append(i); }
         }
@@ -110,6 +109,34 @@ public:
         delete BC_mat;
     }
 };
+
+#ifdef MPI_BUILD
+    class ParEnforcedSolsUpdateRHSOperator
+    {
+    protected:
+        const Array<int> attr_marker;
+        
+        HypreParMatrix *BC_elim = nullptr;
+
+        bool isOperatorSet = false;
+        
+    public:
+        // Class constructors
+        ParEnforcedSolsUpdateRHSOperator(const Array<int> &attr_marker_) : attr_marker(attr_marker_) {}
+
+        // Function set the values of BC_mat (the operator) from a BilinearForm
+        void SetOperator(HypreParMatrix &varf_mat, ParBilinearForm &varf);
+        
+        // Function that takes in the solution vector and b vector (i.e., RHS) and updates b reflect the effects of the temporal BC
+        void UpdateLinearFormVector(const Vector &x, Vector &b);
+
+        // Class destructor
+        ~ParEnforcedSolsUpdateRHSOperator()
+        {
+            delete BC_elim;
+        }
+    };
+#endif
 
 
 
@@ -164,6 +191,49 @@ public:
     // For defining the Eval function in parts: a temporally-dependent part and a spatially-dependent part (MoFA considers space-time separable BCs).
     double EvalSpatiallyDependentFunction(ElementTransformation &T, const IntegrationPoint &ip);
 };
+
+#ifdef MPI_BUILD
+class ParDirichlettBC : public Coefficient, public ParEnforcedSolsUpdateRHSOperator
+{
+private:
+    function<void(const Vector&, double&)> BC_func_space;
+    bool isSpaceFuncSet = false;
+
+    function<void(const double&, double&)> BC_func_time;
+    bool isTimeFuncSet = false;
+
+    // variable 'time' is owned by Coefficient
+
+public:
+    // Inherit the constructors
+    using Coefficient::Coefficient;
+    using ParEnforcedSolsUpdateRHSOperator::ParEnforcedSolsUpdateRHSOperator;
+    
+    // Define the class constructors
+    ParDirichlettBC(const Array<int> &attr_marker_) : ParEnforcedSolsUpdateRHSOperator(attr_marker_), Coefficient() {}
+
+    // function 'SetTime(double t) { time = t; }' is owned by Coefficient
+    
+    // Sets the spatially-dependent part/function of the BC to be evaluated (i.e., X(x) in BCs of the form u(x,t) = X(x)T(t))
+    void SetSpatiallyDependentFunction(function<void(const Vector&, double&)> X) { BC_func_space = X; isSpaceFuncSet = true; }
+
+    // Sets the temporally-dependent part/function of the BC to be evaluated (i.e., T(t) in BCs of the form u(x,t) = X(x)T(t))
+    void SetTemporallyDependentFunction(function<void(const double&, double&)> T) { BC_func_time = T; isTimeFuncSet = true; }
+
+
+    // Function to project the BC to the corresponding vdofs of a gridfunction
+    void ProjectToGridFunction(ParGridFunction &gf);
+
+    // The handle for evaluating the BC. Used by functions that project the BC to gridfunctions, etc.
+    double Eval(ElementTransformation &T, const IntegrationPoint &ip);
+    
+    // For defining the Eval function in parts: a temporally-dependent part and a spatially-dependent part (MoFA considers space-time separable BCs).
+    double EvalTemporallyDependentFunction(const double &t);
+
+    // For defining the Eval function in parts: a temporally-dependent part and a spatially-dependent part (MoFA considers space-time separable BCs).
+    double EvalSpatiallyDependentFunction(ElementTransformation &T, const IntegrationPoint &ip);
+};
+#endif
 
 
 
@@ -307,6 +377,8 @@ public:
 class AveragingOperator
 {
 private:
+    string upscaling_theory;
+
     int N_AR;
     int vdim;
     int DOFs_per_vdim; // This is for the dummy avg space (before making it size N_AR * vdim)
@@ -328,9 +400,12 @@ private:
 
 public:
     // Class constructors
-    AveragingOperator(FiniteElementSpace *fespace_) : fespace(fespace_)
+    AveragingOperator(FiniteElementSpace *fespace_, string upscaling_theory_ = "MoFA") : fespace(fespace_), upscaling_theory(upscaling_theory_)
     {
-        N_AR = fespace_->GetMesh()->attributes.Max(); // Get the number of averaging regions defined by the mesh
+        // Get the number of averaging regions defined by the mesh
+        if (upscaling_theory == "MoFA") { N_AR = fespace_->GetMesh()->attributes.Max(); } 
+        else if (upscaling_theory == "Homogenization") { N_AR = 1; }
+
         vdim = fespace_->GetVDim(); // Get vdim (i.e., the number of vector components) used to define the finite element space
         
         for (int i = 0; i < N_AR; i++) { AR_Elem_inds.push_back(vector<int>()); } // Initialize AR_Elem_inds as an array of arrays
@@ -351,9 +426,12 @@ public:
         CreateAvgOperator();
         correctARAreas = true;
     }
-    AveragingOperator(FiniteElementSpace *fespace_, vector<int> AR_tags) : fespace(fespace_)
+    AveragingOperator(FiniteElementSpace *fespace_, vector<int> AR_tags, string upscaling_theory_ = "MoFA") : fespace(fespace_), upscaling_theory(upscaling_theory_)
     {
-        N_AR = AR_tags.size(); // Get the number of averaging regions defined in the mesh
+        // Get the number of averaging regions defined by the mesh
+        if (upscaling_theory == "MoFA") { N_AR = AR_tags.size(); } 
+        else if (upscaling_theory == "Homogenization") { N_AR = 1; }
+
         vdim = fespace_->GetVDim(); // Get vdim (i.e., the number of vector components) used to define the finite element space
         
         for (int i = 0; i < N_AR; i++) { AR_Elem_inds.push_back(vector<int>()); } // Initialize AR_Elem_inds as an array of arrays
@@ -534,6 +612,76 @@ public:
     }
 };
 
+#ifdef MPI_BUILD
+    // ===============================================================
+    //   Declare the operator for handling the time stepping of
+    //   linear systems in MPI parallel.
+    // ===============================================================
+    class ParLinearTimeDependentOperator : public TimeDependentOperator
+    {
+        // For linear systems of the form:   M * du/dt + A * u = b
+        // This operator takes in the bilinear forms corresponding to the
+        // mass matrix (M) and linear system (A), as well as the linear form (b).
+
+    private:
+        MPI_Comm comm;
+
+        HypreParMatrix &M, &A;
+        Vector &b;
+        double dt;
+
+        Array<int> block_offsets_true;
+        
+        HypreParMatrix *F = NULL;
+        BlockOperator *Op = NULL;
+        BlockDiagonalPreconditioner *PC = NULL;
+
+        HypreSmoother *M_inv = NULL;
+        CGSolver explicitSolver; // Solver that applies the inverse of symmetric, positive-definite mass matrix M
+        
+        Solver *F_inv = NULL; 
+        GMRESSolver gmresSolver; // Solver that applies the inverse of a non-symmetic, non-positive-definite matrix (for implicit Euler)
+        CGSolver cgSolver; // Solver that applies the inverse of a symmetic, positive-definite matrix (for implicit Euler)
+        Solver *implicitSolver = NULL;
+        
+    public:
+        // Constructor method
+        ParLinearTimeDependentOperator(HypreParMatrix &M_, HypreParMatrix &A_, Vector &b_, double dt_, MPI_Comm comm_ ) : M(M_), A(A_), b(b_), dt(dt_), comm(comm_)
+        {
+            // Initiate the preconditioner
+            block_offsets_true.SetSize(2);
+            block_offsets_true[0] = 0;
+            block_offsets_true[1] = A.Height();
+            block_offsets_true.PartialSum();
+            Op = new BlockOperator(block_offsets_true);
+            PC = new BlockDiagonalPreconditioner(block_offsets_true);
+        }
+        
+
+        // Function to create the preconditioner for Explicit Euler and set up the solver
+        void PrepareExplicitEuler();
+        
+        // Function to create the preconditioner for Implicit Euler and set up the solver
+        void PrepareImplicitEuler(string solver_type = "GMRESSolver", string PC_type = "BlockILU");
+        /*
+        // Compute du/dt of the ODE system    M * du/dt + A * u = b
+        void Mult(const Vector &u, Vector &du_dt) const override;
+        */
+        // Compute du/dt of the ODE system   (M + A*dt) * du/dt + A * u = b
+        void ImplicitSolve(const real_t dt, const Vector &u, Vector &du_dt) override;
+        
+        // Class destructor
+        ~ParLinearTimeDependentOperator()
+        {
+            delete F;
+            delete Op;
+            delete F_inv;
+            delete PC;
+            delete M_inv;
+        }
+    };
+#endif
+
 
 
 
@@ -653,6 +801,7 @@ private:
 
     #ifdef MPI_BUILD
         std::shared_ptr<ParMesh> par_mesh;
+        int* partitioning;
     #endif
 
 public:
@@ -703,7 +852,7 @@ public:
 
         // Function for providing a raw pointer to the "mesh" variable
         ParMesh* GetParMesh() { return par_mesh.get(); }
-    
+        int* GetPartitioning() { return partitioning; }
     #endif
 };
 
@@ -732,7 +881,7 @@ protected:
     int fes_dim;
 
     std::shared_ptr<GridFunction> gf;
-    
+        
     std::unique_ptr<FiniteElementCollection> fec_local;
     std::unique_ptr<FiniteElementSpace> fes_local;
     std::shared_ptr<GridFunction> gf_local;
@@ -740,6 +889,11 @@ protected:
     bool manage_gf_mesh = false;
     Mesh *gf_mesh = nullptr;
     
+    #ifdef MPI_BUILD
+        ParGridFunction *par_gf;
+        FiniteElementSpace *par_fes;
+    #endif
+
 public:
     // Constructor methods
     GridFunctionManager(string &gf_file_path, Mesh* gf_mesh_, double gf_scale = 1.0)
@@ -781,12 +935,30 @@ public:
     // Functions for providing access to variables in the class
     GridFunction* GetGridFunction() { return gf.get(); }
     FiniteElementSpace* GetGridFunctionFES() { return fes; }
+    Mesh* GetGridFunctionMesh() { return &*gf_mesh; }
+
+
+    // Define functions for MPI-parallel
+    #ifdef MPI_BUILD
+        // Function for transfering the gridfunction "gf" to a ParGridFunction
+        void MakeParGridFunction(ParMesh* mesh_, int* partitioning_);
+    
+        // Functions for providing access to variables in the class
+        ParGridFunction* GetParGridFunction() { return par_gf; }
+        FiniteElementSpace* GetParGridFunctionFES() { return par_fes; }
+    #endif
 
 
     // Class destructor
     ~GridFunctionManager()
     {
+        // Delete the GridFunction mesh, if it is managed by the manager
         if (manage_gf_mesh) { delete gf_mesh; }
+        
+        // Delete the ParGridFunction
+        #ifdef MPI_BUILD
+            delete par_gf;
+        #endif
     }
 };
 
@@ -820,6 +992,13 @@ public:
     
     // Functions for providing access to variables in the class
     GridFunctionCoefficient* GetGridFunctionCoefficient() { return &gfc; }
+
+    
+    // Define functions for MPI-parallel
+    #ifdef MPI_BUILD
+        // Function for making a grid function coefficient from "par_gf" in GridFunctionManager
+        void MakeParGridFunctionCoefficient() { assert (fes_dim == 1); gfc = GridFunctionCoefficient(par_gf); }
+    #endif
 };
 
 
@@ -847,14 +1026,18 @@ public:
         : GridFunctionManager(gf_file_path, gf_mesh_file_path, gf_scale) {}
 
 
-    // Function for making a vector grid function from "gf" in GridFunctionManager
+    // Function for making a vector grid function coefficient from "gf" in GridFunctionManager
     void MakeVectorGridFunctionCoefficient() { assert (fes_dim == 2 || fes_dim == 3); vgfc = VectorGridFunctionCoefficient(gf.get()); }
 
     
     // Functions for providing access to variables in the class
     VectorGridFunctionCoefficient* GetVectorGridFunctionCoefficient() { return &vgfc; }
+
+
+    // Define functions for MPI-parallel
+    #ifdef MPI_BUILD
+        // Function for making a vector grid function coefficient from "par_gf" in GridFunctionManager
+        void MakeParVectorGridFunctionCoefficient() { assert (fes_dim == 2 || fes_dim == 3); vgfc = VectorGridFunctionCoefficient(par_gf); }
+    #endif
 };
-
-
-
 

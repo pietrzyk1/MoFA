@@ -140,6 +140,31 @@ void EnforcedSolsUpdateRHSOperator::UpdateLinearFormVector(const Vector &x, Vect
 }
 
 
+#ifdef MPI_BUILD
+    // ===============================================================
+    //   Define the functions for the ParEnforcedSolsUpdateRHSOperator class.
+    // ===============================================================
+    // Function to set the values of BC_mat (the matrix) from a BilinearForm
+    void ParEnforcedSolsUpdateRHSOperator::SetOperator(HypreParMatrix &varf_mat, ParBilinearForm &varf)
+    {
+        // Separate-out the rows and columns (into BC_elim) of varf_mat that correspond to the true vdofs of the BC
+        BC_elim = varf.ParallelEliminateEssentialBC(attr_marker, varf_mat);
+        *BC_elim *= -1;
+                
+        // Set isOperatorSet to 'true', now that the operator is set
+        isOperatorSet = true;
+    }
+
+    // Function that takes in the solution vector and b vector (i.e., RHS) and updates b to reflect the effects of the temporal BC (using BC_mat)
+    void ParEnforcedSolsUpdateRHSOperator::UpdateLinearFormVector(const Vector &x, Vector &b)
+    {
+        Vector b_dummy(b.Size()); b_dummy = 0.0;
+        BC_elim->Mult(x, b_dummy);
+        b += b_dummy;
+    }
+#endif
+
+
 
 
 
@@ -185,6 +210,47 @@ double DirichlettBC::EvalSpatiallyDependentFunction(ElementTransformation &T, co
     return sol;
 }
 
+
+#ifdef MPI_BUILD
+    // Function to project the BC to the corresponding vdofs of a gridfunction. NOTE: This function requires that DirichlettBC has
+    // the method double Eval(ElementTransformation &T, const IntegrationPoint &ip)
+    void ParDirichlettBC::ProjectToGridFunction(ParGridFunction &gf)
+    {
+        gf.ProjectBdrCoefficient(*this, attr_marker); // Requires the method Eval(ElementTransformation &T, const IntegrationPoint &ip)
+    }
+
+    // The handle for evaluating the BC. Used by functions that project the BC to gridfunctions, etc.
+    double ParDirichlettBC::Eval(ElementTransformation &T, const IntegrationPoint &ip)
+    {
+        if (!isSpaceFuncSet || !isTimeFuncSet)
+        {
+            // In the future, add an option here to evaluate a function for general BCs of the form u(x,t) = F(x,t)
+            cout << "CRITICAL ERROR: mfem_util.cpp: ParDirichlettBC::Eval: Either the space or time function (or both) of the BC have not been set. Set these functions with the 'SetSpatiallyDependentFunction' and 'SetTemporallyDependentFunction' methods." << endl;
+            exit(EXIT_FAILURE);
+        }
+        return EvalTemporallyDependentFunction(time) * EvalSpatiallyDependentFunction(T, ip);
+    }
+
+    // The handle for evaluating the BC. Used by functions that project the BC to gridfunctions, etc.
+    double ParDirichlettBC::EvalTemporallyDependentFunction(const double &t)
+    {
+        double sol = 0.0;
+        BC_func_time(t, sol);
+        return sol;
+    }
+
+    // The handle for evaluating the BC. Used by functions that project the BC to gridfunctions, etc.
+    double ParDirichlettBC::EvalSpatiallyDependentFunction(ElementTransformation &T, const IntegrationPoint &ip)
+    {
+        // Get the spatial coordinates in x
+        Vector x;
+        T.Transform(ip, x); // x can be called like x(0), x(1), x(2) to get x, y, and z coordinates
+        
+        double sol = 0;
+        BC_func_space(x, sol);
+        return sol;
+    }
+#endif
 
 
 
@@ -374,25 +440,28 @@ void AveragingOperator::CreateBilinearForm(FiniteElementSpace *fespace_)
 // Function for getting 1.) the indices of elements inside each AR, and 2.) the indices of dofs (in the dummy space) of each element inside each AR
 void AveragingOperator::GetARIndices(Mesh *mesh_, vector<int> AR_tags)
 {
-    // Define default AR_tags (i.e., {1 -> N_AR}) if not provided
-    if (AR_tags.size() == 1 && AR_tags[0] == -1)
+    if (upscaling_theory == "MoFA")
     {
-        AR_tags[0] = 1;
-        for (int i = 1; i < N_AR; i++) { AR_tags.push_back( i + 1 ); }
-    }
-    
-    // Get the indices of the elements inside each averaging region
-    for (int i_Elem = 0; i_Elem < mesh_->GetNE(); i_Elem++)
-    {
-        for (int i_AR = 0; i_AR < N_AR; i_AR++)
-        {
-            //if (mesh_->GetAttribute(i_Elem) == i_AR + 1)
-            if (mesh_->GetAttribute(i_Elem) == AR_tags[i_AR])
-            {
-                AR_Elem_inds[i_AR].push_back(i_Elem);
-                break;
+        // Define default AR_tags (i.e., {1 -> N_AR}) if not provided
+        if (AR_tags.size() == 1 && AR_tags[0] == -1) {
+            AR_tags[0] = 1;
+            for (int i = 1; i < N_AR; i++) { AR_tags.push_back( i + 1 ); }
+        }
+        
+        // Get the indices of the elements inside each averaging region
+        for (int i_Elem = 0; i_Elem < mesh_->GetNE(); i_Elem++) {
+            for (int i_AR = 0; i_AR < N_AR; i_AR++) {
+                if (mesh_->GetAttribute(i_Elem) == AR_tags[i_AR]) {
+                    AR_Elem_inds[i_AR].push_back(i_Elem);
+                    break;
+                }
             }
         }
+    }
+    else if (upscaling_theory == "Homogenization")
+    {
+        // Get the indices of all elements inside the domain (as the average is taken over the whole unit-cell)
+        for (int i_Elem = 0; i_Elem < mesh_->GetNE(); i_Elem++) { AR_Elem_inds[0].push_back(i_Elem); }
     }
 
     // Get the indices of the DOFS in the dummy avg-space of each element inside each averaging region
@@ -401,14 +470,12 @@ void AveragingOperator::GetARIndices(Mesh *mesh_, vector<int> AR_tags)
     {
         for (int i_Elem = 0; i_Elem < AR_Elem_inds[i_AR].size(); i_Elem++)
         {
-            //fespace_avg->GetElementDofs(AR_Elem_inds[i_AR][i_Elem], Elem_DOFs);
             fespace_avg->GetElementVDofs(AR_Elem_inds[i_AR][i_Elem], Elem_DOFs); // GetElementVDofs apparently outputs dofs like [dof_x^1, dof_x^2, dof_y^1, dof_y^2, ...]
             assert (Elem_DOFs.Size() == DOFs_per_vdim * vdim);
             for (int i_vd = 0; i_vd < vdim; i_vd++)
             {
                 AR_Dof_inds[i_vd][i_AR].insert(AR_Dof_inds[i_vd][i_AR].end(), Elem_DOFs.begin() + i_vd*DOFs_per_vdim, Elem_DOFs.begin() + (i_vd + 1)*DOFs_per_vdim);
             }
-            //AR_Dof_inds[i_AR].insert(AR_Dof_inds[i_AR].end(), Elem_DOFs.begin(), Elem_DOFs.end());
         }
     }
 }
@@ -469,10 +536,14 @@ void AveragingOperator::PrepareUnweightedAvgOperator(const double tol)
     // Finally, sum together the components of each row and store it in rhs_for_avg; these values will be used to implement non-zero
     // averaging conditions.
     
-    SparseMatrix avg_mat_(N_AR * vdim, varf_avg_SpMat.NumCols()); // Initialize the size of the averaging matrix
+    avg_mat = SparseMatrix(N_AR * vdim, varf_avg_SpMat.NumCols());
+    //SparseMatrix avg_mat_(N_AR * vdim, varf_avg_SpMat.NumCols()); // Initialize the size of the averaging matrix
+    
     Vector row(varf_avg_SpMat.NumCols()), row_sum(varf_avg_SpMat.NumCols());
     
-    Array<double> AR_areas_(N_AR);
+    //Array<double> AR_areas_(N_AR);
+    AR_areas = Array<double>(N_AR);
+    
     Array<int> col_inds, all_col_indices(varf_avg_SpMat.NumCols()); // Create an Array of indices from 0 to the number of columns in cavg_SpMat
     for(int i = 0; i < all_col_indices.Size(); i++) { all_col_indices[i] = i; } // Defines cavg_SpMat
     
@@ -487,13 +558,15 @@ void AveragingOperator::PrepareUnweightedAvgOperator(const double tol)
                 for (int i_sum = 0; i_sum < col_inds.Size(); i_sum++) { row_sum[col_inds[i_sum]] += row[i_sum]; } // ...and add it row_sum to sum the DOF rows.
             }
             for (int i = 0; i < row_sum.Size(); i++) { if (abs(row_sum[i]) < tol) { row_sum[i] = 0; }} // If a component of row_sum is really small, just set it to 0; it is likely numerical error.
-            avg_mat_.SetRow(i_AR + N_AR*i_vd, all_col_indices, row_sum); // Insert the row_sum in avg_mat, the matrix discribing the averaging operator
-            if (i_vd == 0) { AR_areas_[i_AR] = row_sum.Sum(); } // Keep the sum of the row for implementing averaging conditions (only do this for the first component; assume it will be the same for the others)
+            //avg_mat_.SetRow(i_AR + N_AR*i_vd, all_col_indices, row_sum); // Insert the row_sum in avg_mat, the matrix discribing the averaging operator
+            avg_mat.SetRow(i_AR + N_AR*i_vd, all_col_indices, row_sum); // Insert the row_sum in avg_mat, the matrix discribing the averaging operator
+            //if (i_vd == 0) { AR_areas_[i_AR] = row_sum.Sum(); } // Keep the sum of the row for implementing averaging conditions (only do this for the first component; assume it will be the same for the others)
+            if (i_vd == 0) { AR_areas[i_AR] = row_sum.Sum(); } // Keep the sum of the row for implementing averaging conditions (only do this for the first component; assume it will be the same for the others)
         }
     }
     
-    avg_mat = avg_mat_;
-    AR_areas = AR_areas_;
+    //avg_mat = avg_mat_;
+    //AR_areas = AR_areas_;
 }
 
 // Function for finalizing the weighted averaging operator (i.e., multiply the rows of avg_mat by the weight function's DOFs in a component-wise fashion).
@@ -561,6 +634,7 @@ void AveragingOperator::ApplyAvgOperator(const Vector &x, Vector &avg, const vec
         }
     }
 }
+
 void AveragingOperator::ApplyWeightedIntegralOperator(const Vector &x, Vector &avg)
 {
     assert(avg.Size() == vdim * N_AR);
@@ -1134,7 +1208,9 @@ void MeshManager::UseLocalMesh()
     // Function for creating a parallel mesh by partitioning the serial mesh (serial mesh could be periodic/local)
     void MeshManager::MakeParallelMesh(MPI_Comm comm)
     {
-        par_mesh = std::make_shared<ParMesh>(ParMesh(comm, *mesh));
+        //par_mesh = std::make_shared<ParMesh>(ParMesh(comm, *mesh));
+        partitioning = mesh->GeneratePartitioning(Mpi::WorldSize());
+        par_mesh = std::make_shared<ParMesh>(ParMesh(comm, *mesh, partitioning));
     }
 
     // Function for clearing and reassigning variable "mesh" to the object pointed at by "par_mesh", but as a Mesh object, not a ParMesh object
@@ -1166,6 +1242,7 @@ void GridFunctionManager::LoadGridFunction(string gf_file_path, Mesh *gf_mesh)
     // Define the grid function using the mesh and the stream
     gf = std::make_shared<GridFunction>(gf_mesh, *gf_ifgz_stream);
     
+    // For debugging
     //gf->Save("fluid_velocity_verification_plot.gf");
     //gf_mesh->Save("fluid_velocity_verification_mesh.mesh");
     //exit(1);
@@ -1234,6 +1311,146 @@ void GridFunctionManager::UseLocalGridFunction()
 }
 
 
+// Define functions for MPI-parallel
+#ifdef MPI_BUILD
+    // Function for transfering the gridfunction "gf" to a ParGridFunction
+    void GridFunctionManager::MakeParGridFunction(ParMesh* mesh_, int* partitioning_)
+    {
+        par_gf = new ParGridFunction(mesh_, gf.get(), partitioning_);
+        par_fes = par_gf->FESpace();
+    }
+#endif
 
 
 
+
+#ifdef MPI_BUILD
+    // ===============================================================
+    //   Define the functions for the ParLinearTimeDependentOperator class.
+    // ===============================================================
+    // Define the function that prepares the operator, preconditioner, and solver for Explicitr Euler time stepping
+    void ParLinearTimeDependentOperator::PrepareExplicitEuler()
+    {
+        // For reference:   M * du/dt + A * u = b
+        // We solve for du/dt.
+
+        // Solve parameters
+        int maxIter(5000);
+        real_t rtol(1.0e-7);
+        real_t atol(1.0e-9);
+
+        // Create the preconditioner (Note: 'dt' is in the preconditioner)
+        M_inv = new HypreSmoother(M, 0); // 0 for DSmoother
+        M_inv->iterative_mode = false;
+        PC->SetDiagonalBlock(0, M_inv);
+
+        // Build the block operator
+        Op->SetBlock(0, 0, &M);
+        
+        // For Explicit Euler
+        explicitSolver = CGSolver(comm);
+        explicitSolver.iterative_mode = false;
+        explicitSolver.SetRelTol(rtol);
+        explicitSolver.SetAbsTol(atol);
+        explicitSolver.SetMaxIter(maxIter);
+        explicitSolver.SetPrintLevel(0);
+        explicitSolver.SetOperator(M);
+        explicitSolver.SetPreconditioner(*PC);
+    }
+    
+    // Define the function that prepares the operator, preconditioner, and solver for Implicit Euler time stepping
+    void ParLinearTimeDependentOperator::PrepareImplicitEuler(string solver_type, string PC_type)
+    {
+        // For reference:   (M + A*dt) * du/dt + A * u = b
+        // We solve for du/dt.
+        
+        // Solve parameters
+        int maxIter(8000);
+        //real_t rtol(1.0e-7);
+        //real_t atol(1.0e-9);
+        real_t rtol(1.0e-4);
+        real_t atol(1.0e-6);
+        
+        // Create F = M + A dt  (i.e., the inverted matrix)
+        F = Add(1.0, M, dt, A);
+
+        // Create the preconditioner (Note: 'dt' is in the preconditioner)
+        if (PC_type == "DSmoother")
+        {
+            F_inv = new HypreSmoother(*F, 0); // 0 for DSmoother
+            F_inv->iterative_mode = false;
+            PC->SetDiagonalBlock(0, F_inv);
+        }
+        else if (PC_type == "BlockILU")
+        {
+            F_inv = new HypreILU();
+            //F_inv->SetPrintLevel(0);
+            F_inv->SetOperator(*F);
+            PC->SetDiagonalBlock(0, F_inv);
+        }
+        else
+        {
+            cout << "mfem_util.cpp: ParLinearTimeDependentOperator::PrepareImplicitEuler(): CRITICAL ERROR: PC_type not recognized." << endl;
+            exit(1);
+        }
+
+
+        // Build the block operator (Note: 'dt' is in the operator)
+        Op->SetBlock(0, 0, F);
+        
+        // Prepare the solver
+        if (solver_type == "CGSolver")
+        {
+            cgSolver = CGSolver(comm);
+            cgSolver.iterative_mode = true;
+            cgSolver.SetRelTol(rtol);
+            cgSolver.SetAbsTol(atol);
+            cgSolver.SetMaxIter(maxIter);
+            cgSolver.SetPrintLevel(0);
+            cgSolver.SetOperator(*Op);
+            cgSolver.SetPreconditioner(*PC);
+            implicitSolver = &cgSolver;
+        }
+        else if (solver_type == "GMRESSolver")
+        {
+            gmresSolver = GMRESSolver(comm);
+            gmresSolver.iterative_mode = true;
+            gmresSolver.SetRelTol(rtol);
+            gmresSolver.SetAbsTol(atol);
+            gmresSolver.SetMaxIter(maxIter);
+            gmresSolver.SetPrintLevel(0);
+            gmresSolver.SetOperator(*Op);
+            gmresSolver.SetPreconditioner(*PC);
+            implicitSolver = &gmresSolver;
+        }
+        else
+        {
+            cout << "mfem_util.cpp: ParLinearTimeDependentOperator::PrepareImplicitEuler(): CRITICAL ERROR: solver_type not recognized." << endl;
+            exit(1);
+        }
+    }
+    /*
+    // Define the explicit Mult function for the operator
+    void LinearTimeDependentOperator::Mult(const Vector &u, Vector &du_dt) const
+    {
+        // For reference:   M * du/dt + A * u = b
+        // We solve for du/dt.
+
+        A.Mult(u, du_dt); // Compute A u
+        du_dt *= -1; // Move A u to RHS
+        du_dt += b; // -A u + b
+        explicitSolver.Mult(du_dt, du_dt); // Compute du/dt = (M^{-1}) * (-A u + b)
+    }
+    */
+    // Define the implicit Mult function for the operator
+    void ParLinearTimeDependentOperator::ImplicitSolve(const real_t dt, const Vector &u, Vector &du_dt)
+    {
+        // For reference:   (M + A*dt) * du/dt + A * u = b
+        // We solve for du/dt.
+        A.Mult(u, du_dt); // Compute  A u
+        du_dt *= -1; // Move A u to RHS
+        du_dt += b; // -A u + b
+        implicitSolver->Mult(du_dt, du_dt); // Compute du/dt = ((M + A*dt)^{-1}) * (-A u + b)
+    }
+    
+#endif

@@ -317,9 +317,13 @@ int main(int argc, char *argv[])
     args.AddOption(&solve_mode, "-S", "--solve_mode", "Define how the code is being run. Options: 'serial' or 'ensemble' (i.e., closure problems are being solved as an ensamble in parallel)");
     args.ParseCheck();
 
+    
     // ===============================================================
     //   Define variables based on the options provided in the parser
     // ===============================================================
+    // When using the parallel solver, if advection is active/the fluid velocity was previous solved and used here, the mesh saved with the fluid velocity must be used
+    //if (active_advection == 1) { mesh_file_path = fluid_velocity_mesh_file_path; }
+
     // Define the closure output file name with the prefix, ID, and suffix
     string closure_output_file_name = closure_output_file_name_prefix + closure_output_file_name_ID + closure_output_file_name_suffix;
     // Define the mesh output file name depending on whether the local mesh is being used/saved
@@ -366,7 +370,7 @@ int main(int argc, char *argv[])
     // ===============================================================
     //   Get the mesh, mesh information, and corresponding variables.
     // ===============================================================
-    cout << "TCS:   Obtaining mesh and mesh info... ";
+    cout << globalVars.FILENAME << ":   Obtaining mesh and mesh info... ";
 
     // Get "global" mesh info from the mesh info file (this is information about the full/parent/global mesh)
     JSONDict mesh_info; mesh_info.loadFromFile(mesh_info_file_path);
@@ -409,14 +413,14 @@ int main(int argc, char *argv[])
     Mesh *mesh = mesh_manager.GetMesh();
 
     cout << "Complete." << endl;
-    cout << "TCS:   Total number of averaging regions: " << N_AR_global << endl;
-    cout << "TCS:   Number of averaging regions considered in closure problem: " << N_AR << endl;
+    cout << globalVars.FILENAME << ":   Total number of averaging regions: " << N_AR_global << endl;
+    cout << globalVars.FILENAME << ":   Number of averaging regions considered in closure problem: " << N_AR << endl;
     
 
     // ===============================================================
     //   Define finite element spaces for the concentration.
     // ===============================================================
-    cout << "TCS:   Defining finite element spaces... ";
+    cout << globalVars.FILENAME << ":   Defining finite element spaces... ";
 
     // Finite element space for concentration
     FiniteElementCollection *fec_c = new H1_FECollection(order, mesh->Dimension());
@@ -425,8 +429,8 @@ int main(int argc, char *argv[])
     cout << "Complete." << endl;
     
     // Print the number of unknowns for concentration and total
-    cout << "TCS:   Number of unknowns in concentration: " << fespace_c->GetTrueVSize() << endl;
-    cout << "TCS:   Number of unknowns in total: " << fespace_c->GetTrueVSize() << endl;
+    cout << globalVars.FILENAME << ":   Number of unknowns in concentration: " << fespace_c->GetTrueVSize() << endl;
+    cout << globalVars.FILENAME << ":   Number of unknowns in total: " << fespace_c->GetTrueVSize() << endl;
 
     
     // ===============================================================
@@ -440,20 +444,20 @@ int main(int argc, char *argv[])
     if (active_advection == 1)
     {
         // Create the fluid velocity vector grid function coefficient manager
-        cout << "TCS:   Loading fluid velocity... ";
+        cout << globalVars.FILENAME << ":   Loading fluid velocity... ";
         fluid_velocity_vgfc_manager = std::make_unique<VectorGridFunctionCoefficientManager>(fluid_velocity_file_path, fluid_velocity_mesh_file_path, Pe_s);
         cout << "Complete." << endl;
         
         // Create the local fluid velocity grid function if necessary
         if (useLocalMesh == 1) {
-            cout << "TCS:   Obtaining the local fluid velocity... ";
+            cout << globalVars.FILENAME << ":   Obtaining the local fluid velocity... ";
             fluid_velocity_vgfc_manager->MakeLocalGridFunction(mesh_manager.GetLocalMesh());
             fluid_velocity_vgfc_manager->UseLocalGridFunction();
             cout << "Complete." << endl;
         }
         
         // Create the fluid velocity VectorGridFunctionCoefficient
-        cout << "TCS:   Creating fluid velocity VectorGridFunctionCoefficient... ";
+        cout << globalVars.FILENAME << ":   Creating fluid velocity VectorGridFunctionCoefficient... ";
         fluid_velocity_vgfc_manager->MakeVectorGridFunctionCoefficient();
         fluid_velocity = fluid_velocity_vgfc_manager->GetVectorGridFunctionCoefficient();
         cout << "Complete." << endl;
@@ -465,6 +469,12 @@ int main(int argc, char *argv[])
             //GridFunction u_gf_save(fespace_u_save);
             //u_gf_save.ProjectCoefficient(fluid_velocity);
             //u_gf_save.Save((*mesh_output_dir + "fluid_velocity_verification_plot.gf").c_str());
+            
+            //FiniteElementSpace *fespace_u_save = new FiniteElementSpace(mesh, fec_c, mesh->Dimension());
+            //GridFunction u_gf_save(fespace_u_save);
+            //u_gf_save.ProjectCoefficient(*fluid_velocity);
+            //u_gf_save.Save((mesh_output_dir + "fluid_velocity_verification_plot.gf").c_str());
+            //mesh->Save(mesh_output_dir + "closure_mesh.mesh");
         }
     }
 
@@ -480,14 +490,14 @@ int main(int argc, char *argv[])
     if (forcing_function_file_name != "None")
     {
         // Create the forcing function grid function coefficient manager (here, we use the current mesh---parent or sub---, as it is likely that the saved forcing function of the same mesh. If not, a procedure similar to the velocity will have to be done)
-        cout << "TCS:   Loading forcing function... ";
+        cout << globalVars.FILENAME << ":   Loading forcing function... ";
         double neg_one = -1.0;
         string forcing_function_path_name = forcing_function_dir + forcing_function_file_name;
         forcing_function_gfc_manager = std::make_unique<GridFunctionCoefficientManager>(forcing_function_path_name, mesh_manager.GetMesh(), neg_one);
         cout << "Complete." << endl;
         
         // Create the forcing function GridFunctionCoefficient
-        cout << "TCS:   Creating forcing function GridFunctionCoefficient... ";
+        cout << globalVars.FILENAME << ":   Creating forcing function GridFunctionCoefficient... ";
         forcing_function_gfc_manager->MakeGridFunctionCoefficient();
         forcing_function = forcing_function_gfc_manager->GetGridFunctionCoefficient();
         cout << "Complete." << endl;
@@ -542,7 +552,7 @@ int main(int argc, char *argv[])
     // ===============================================================
     //   Define/Prepare boundary conditions.
     // ===============================================================
-    cout << "TCS:   Defining boundary condition functions... ";
+    cout << globalVars.FILENAME << ":   Defining boundary condition functions... ";
     
     // Here, we are defining two marker arrays to mark 1.) the inlet, and 2.) the outlet.
     
@@ -566,7 +576,7 @@ int main(int argc, char *argv[])
     // ===============================================================
     //   Define block structure of the system.
     // ===============================================================
-    cout << "TCS:   Defining the block system structure... ";
+    cout << globalVars.FILENAME << ":   Defining the block system structure... ";
 
     // Notes: - This defines an array of offsets for each variable. The last component of the Array is the sum of the dimensions
     //          of each block.
@@ -582,7 +592,7 @@ int main(int argc, char *argv[])
     // ===============================================================
     //   Define the solution and right-hand-side (block) vectors and initialize them.
     // ===============================================================
-    cout << "TCS:   Initializing the solution vector and RHS vector... ";
+    cout << globalVars.FILENAME << ":   Initializing the solution vector and RHS vector... ";
 
     BlockVector sol_BLK(block_offsets), b_BLK(block_offsets);
     sol_BLK = 0.0;
@@ -597,7 +607,7 @@ int main(int argc, char *argv[])
     LinearForm *varf_force = nullptr, *varf_reaction = nullptr;
     if (forcing_function_file_name != "None")
     {
-        cout << "TCS:   Defining the RHS vector (body force function)... ";
+        cout << globalVars.FILENAME << ":   Defining the RHS vector (body force function)... ";
 
         varf_force = new LinearForm(forcing_function_gfc_manager->GetGridFunctionFES());
         varf_force->AddDomainIntegrator(new DomainLFIntegrator(*forcing_function));
@@ -610,7 +620,7 @@ int main(int argc, char *argv[])
     // TODO: check compatibility with local mesh formulation
     if (useReactions == 1)
     {
-        cout << "TCS:   Defining the RHS vector (Neumann BC), if there are any... ";
+        cout << globalVars.FILENAME << ":   Defining the RHS vector (Neumann BC), if there are any... ";
         
         for (int i_r = 0; i_r < active_reactions.size(); i_r++)
         {
@@ -641,7 +651,7 @@ int main(int argc, char *argv[])
     // ===============================================================
     //   Create the bilinear form for the diffusion term.
     // ===============================================================
-    cout << "TCS:   Assembling bilinear forms and stiffness matrix... ";
+    cout << globalVars.FILENAME << ":   Assembling bilinear forms and stiffness matrix... ";
 
     // Initiate the bilinear form of the diffusion term
     BilinearForm *varf_cdiff(new BilinearForm(fespace_c));
@@ -649,10 +659,8 @@ int main(int argc, char *argv[])
     varf_cdiff->AddDomainIntegrator(new DiffusionIntegrator(Diff_coef));
     if (active_advection == 1) { varf_cdiff->AddDomainIntegrator(new ConvectionIntegrator(*fluid_velocity)); }
     
-    
     // Implement alpha for generalized closure residual (if available)
     if (useGenResForm) { gen_res_manager.ImplementAlpha(varf_cdiff); }
-    
     
     varf_cdiff->Assemble();
     
@@ -679,7 +687,7 @@ int main(int argc, char *argv[])
     // ===============================================================
     //   Create the bilinear form for the averaging operator/forcing unknowns.
     // ===============================================================
-    cout << "TCS:   Assembling averaging operator... ";
+    cout << globalVars.FILENAME << ":   Assembling averaging operator... ";
 
     // Notes: - We only create the bilinear form matrix for the averaging operator, because its transpose is identically
     //          the bilinear form of the forcing unknowns in the mass conservation equation.
@@ -695,7 +703,7 @@ int main(int argc, char *argv[])
     // ===============================================================
     //   Define the block operator for the system.
     // ===============================================================
-    cout << "TCS:   Assembling the block system... ";
+    cout << globalVars.FILENAME << ":   Assembling the block system... ";
     
     // Initiate block operator
     BlockOperator closureOp_BLK(block_offsets);
@@ -737,7 +745,7 @@ int main(int argc, char *argv[])
     // ===============================================================
     //   Construct the preconditioner operator.
     // ===============================================================
-    cout << "TCS:   Assembling the preconditioners... ";
+    cout << globalVars.FILENAME << ":   Assembling the preconditioners... ";
 
     // Notes: - Here, we use Symmetric Gauss-Seidel to approximate the inverse of the "a" Schur complement.
     //
@@ -783,7 +791,7 @@ int main(int argc, char *argv[])
     // ===============================================================
     //   Solve the system with MINRES.
     // ===============================================================
-    cout << "TCS:   Solving" << endl;
+    cout << globalVars.FILENAME << ":   Solving" << endl;
 
     //MINRESSolver solver;
     GMRESSolver solver;
@@ -899,4 +907,3 @@ void outlet_BC_func(const Vector &p, Vector &F)
    
    F(0) = 0.0;
 }
-

@@ -240,7 +240,7 @@ void createUnitTestPorescaleConfig(string &project_dir, string &config_file_name
         istringstream meshDict_stream = createMeshDict(project_dir, "porescale_mesh", "porescale",
             1, is3D, periodicity, {0.002, 0.002},
             0.1, {10, 1}, {1.0, 0.1}, {0.1, 0.1},
-            0, 0.2, 0.175, 2.0,
+            0, 0.002, 0.175, 2.0,
             project_dir + "data/", "Tutorial_Geometry.txt", 0.1,
             {}, {});
         meshDict.loadFromStream( meshDict_stream );

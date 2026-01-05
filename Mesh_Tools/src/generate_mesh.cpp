@@ -676,7 +676,7 @@ int main(int argc, char **argv)
         // ========================================
         // Create inlet, outlet, and no slip physical groups
         // ========================================
-        vector<int> used_tags; int used_tag;
+        std::vector<int> used_tags; int used_tag;
         
         used_tag = getPhysicalGroup(inlet_tag, inletSide, 1, top_ln_tags, right_ln_tags, bottom_ln_tags, left_ln_tags);
         used_tags.push_back( used_tag );
