@@ -149,7 +149,7 @@ istringstream createTransportClosureDict(const string &project_dir,
     const int useLocalMesh, const int N_neighbor_layers, const int saveLocalMesh,
     const double resAvg_alpha, const double resAvg_beta, const double resAvg_gamma,
     const int max_iter, const double rel_tol, const double abs_tol,
-    const int maxRecursionIter = 2)
+    const int importFluidMesh = 0, const int maxRecursionIter = 2)
 {
     JSONDict closureDict;
 
@@ -159,6 +159,7 @@ istringstream createTransportClosureDict(const string &project_dir,
     closureDict_sim["isPeriodic"] = isPeriodic; // Define whether to use periodic boundary conditions in the 3 directions. 0 = No, 1 = Yes
     closureDict_sim["use inlet"] = useInlet; // Define whether to solve the closure problems associated with the inlet condition at the inlet marked in the mesh. 0 = No, 1 = Yes (the answer is "no" for periodic BC; "yes" for Dirichlet BC)
     closureDict_sim["use reactions"] = useReactions; // Define whether to solve the closure problems associated with the reaction surfaces defined and marked in the mesh. 0 = No, 1 = Yes
+    closureDict_sim["import fluid mesh"] = importFluidMesh; // Define whether the solver should import the mesh used for solving the Stokes problem (for fluid velocity) or use the mesh create from gmsh. 0 = use gmsh mesh, 1 = use MFEM mesh saved with the fluid velocity solution
     closureDict["simulation parameters"] = &closureDict_sim;
 
     JSONDict closureDict_res;

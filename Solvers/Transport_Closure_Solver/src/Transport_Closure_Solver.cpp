@@ -109,6 +109,7 @@ int main(int argc, char *argv[])
     vector<int> isPeriodic = {0, 0, 0};
     int useInlet = 0;
     int useReactions = 0;
+    int importFluidMesh = 0;
     
     int active_AR = -1;
     int active_inlet = 0;
@@ -227,6 +228,7 @@ int main(int argc, char *argv[])
         sub_dict.getValue("isPeriodic", isPeriodic);
         sub_dict.getValue("use inlet", useInlet);
         sub_dict.getValue("use reactions", useReactions);
+        sub_dict.getValue("import fluid mesh", importFluidMesh);
         
         sub_dict = *closure_dict["residual parameters"];
         sub_dict.getValue("resAvg_alpha", resAvg_alpha);
@@ -321,8 +323,8 @@ int main(int argc, char *argv[])
     // ===============================================================
     //   Define variables based on the options provided in the parser
     // ===============================================================
-    // When using the parallel solver, if advection is active/the fluid velocity was previous solved and used here, the mesh saved with the fluid velocity must be used
-    //if (active_advection == 1) { mesh_file_path = fluid_velocity_mesh_file_path; }
+    // When using the parallel solver, if advection is active/the fluid velocity was previous solved and used here, the mesh saved with the fluid velocity must be used. Also, use consistent BCs (i.e., both fluid and transport simulations should be non-periodic)
+    if (active_advection == 1 && importFluidMesh == 1) { mesh_file_path = fluid_velocity_mesh_file_path; }
 
     // Define the closure output file name with the prefix, ID, and suffix
     string closure_output_file_name = closure_output_file_name_prefix + closure_output_file_name_ID + closure_output_file_name_suffix;

@@ -140,6 +140,7 @@ void createTutorialUpscaledConfig(string &project_dir, string &config_file_name)
     closureDict_sim["isPeriodic"] = {0, 0, 0}; // Define whether to use periodic boundary conditions in the 3 directions. 0 = No, 1 = Yes
     closureDict_sim["use inlet"] = 1; // Define whether to solve the closure problems associated with the inlet condition at the inlet marked in the mesh. 0 = No, 1 = Yes (the answer is "no" for periodic BC; "yes" for Dirichlet BC)
     closureDict_sim["use reactions"] = 0; // Define whether to solve the closure problems associated with the reaction surfaces defined and marked in the mesh. 0 = No, 1 = Yes
+    closureDict_sim["import fluid mesh"] = 0; // Define whether the solver should import the mesh used for solving the Stokes problem (for fluid velocity) or use the mesh create from gmsh. 0 = use gmsh mesh, 1 = use MFEM mesh saved with the fluid velocity solution
     closureDict["simulation parameters"] = &closureDict_sim;
 
     JSONDict closureDict_res;

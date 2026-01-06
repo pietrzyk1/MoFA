@@ -14,6 +14,13 @@
 # Set the minimum version of CMake that is allowed to be used for building MoFA
 set(CMAKE_MIN_VERSION "3.22.1") # EDIT AS NECESSARY
 
+
+# For HPC to use c++17 (uncomment if building MoFA on HPC)
+#set(CMAKE_CXX_STANDARD 17)
+#set(CMAKE_CXX_STANDARD_REQUIRED ON)
+#set(CMAKE_CXX_EXTENSIONS OFF)
+
+
 # Define a cmake variable for the MFEM source directory path. This will be used for all cmake files in the MoFA package.
 set(MFEM_SOURCE_DIR "$ENV{HOME}/MFEM/mfem-4.8") # EDIT AS NECESSARY
 
@@ -25,8 +32,9 @@ set(GMSH_SOURCE_DIR "$ENV{HOME}/gmsh/gmsh-4.13.1-Linux64-sdk") # EDIT AS NECESSA
 # For Parallel Build #
 ########################################################
 
-# Define whether or not the executables for MPI parallel should be built (where available) along side the serial executables.
-option(BUILD_FOR_PARALLEL "Build the executables for MPI parallel (in addition to the serial executables)" ON) # EDIT AS NECESSARY
+# Define which type of executables should be built.
+option(BUILD_FOR_SERIAL "Build the executables for serial. If only the parallel build of MFEM is available (e.g., on an HPC environment), turn to OFF)" ON) # EDIT AS NECESSARY
+option(BUILD_FOR_PARALLEL "Build the executables for MPI parallel." ON) # EDIT AS NECESSARY
 
 # Define a cmake variable for the Parallel-built MFEM source directory path. This will be used for all cmake files of MPI builds in the MoFA package.
 set(PAR_MFEM_SOURCE_DIR "$ENV{HOME}/MFEM/mfem-4.8_Par") # EDIT AS NECESSARY
