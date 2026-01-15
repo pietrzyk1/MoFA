@@ -86,7 +86,7 @@ int main(int argc, char **argv)
     string outletSide = "none";
 
     int N_AR_x = 10; // Number of averaging regions in the x-direction
-    double geo_scale = (simulation_type == "upscaled") ? 1. : 1./N_AR_x; // geo_scale = 1 is the upscaled model mesh, where AR are 1x1(x1)
+    double geo_scale = (simulation_type == "upscaled" || simulation_type == "homogenization closure") ? 1. : 1./N_AR_x; // geo_scale = 1 is the upscaled model mesh, where AR are 1x1(x1)
     double L_x = N_AR_x  * geo_scale; // Domain length in x-direction
     double ell_x = L_x / N_AR_x; // Averaging region length in x-direction
     
@@ -273,13 +273,13 @@ int main(int argc, char **argv)
             if (importAndCutMethod == "import and cut STL") {
                 std::vector<std::vector<double>> AR_planes;
                 assert (N_AR_x == 10 && N_AR_y == 10 && N_AR_z == 10);
-                if (simulation_type == "upscaled") {
-                    //AR_planes = {{-5.0, -4.0, -3.0, -2.0, -1.0, 0.0, 1.0, 2.0, 3.0, 4.0, 5.0},
-                    //             {-5.0, -4.0, -3.0, -2.0, -1.0, 0.0, 1.0, 2.0, 3.0, 4.0, 5.0},
-                    //             {-5.0, -4.0, -3.0, -2.0, -1.0, 0.0, 1.0, 2.0, 3.0, 4.0, 5.0}};
-                    AR_planes = {{-0.5, -0.4, -0.3, -0.2, -0.1, 0.0, 0.1, 0.2, 0.3, 0.4, 0.5},
-                                 {-0.5, -0.4, -0.3, -0.2, -0.1, 0.0, 0.1, 0.2, 0.3, 0.4, 0.5},
-                                 {-0.5, -0.4, -0.3, -0.2, -0.1, 0.0, 0.1, 0.2, 0.3, 0.4, 0.5}};
+                if (simulation_type == "upscaled" || simulation_type == "homogenization closure") {
+                    AR_planes = {{-5.0, -4.0, -3.0, -2.0, -1.0, 0.0, 1.0, 2.0, 3.0, 4.0, 5.0},
+                                 {-5.0, -4.0, -3.0, -2.0, -1.0, 0.0, 1.0, 2.0, 3.0, 4.0, 5.0},
+                                 {-5.0, -4.0, -3.0, -2.0, -1.0, 0.0, 1.0, 2.0, 3.0, 4.0, 5.0}};
+                    //AR_planes = {{-0.5, -0.4, -0.3, -0.2, -0.1, 0.0, 0.1, 0.2, 0.3, 0.4, 0.5},
+                    //             {-0.5, -0.4, -0.3, -0.2, -0.1, 0.0, 0.1, 0.2, 0.3, 0.4, 0.5},
+                    //             {-0.5, -0.4, -0.3, -0.2, -0.1, 0.0, 0.1, 0.2, 0.3, 0.4, 0.5}};
                 }
                 else if (simulation_type == "porescale") {
                     AR_planes = {{-0.5, -0.4, -0.3, -0.2, -0.1, 0.0, 0.1, 0.2, 0.3, 0.4, 0.5},
@@ -547,19 +547,21 @@ int main(int argc, char **argv)
         // ========================================
         // Create inlet, outlet, and no slip physical groups
         // ========================================
-        inlet_tag = gmsh::model::addPhysicalGroup(2, left_ln_tags);
-        outlet_tag = gmsh::model::addPhysicalGroup(2, right_ln_tags);
-        no_slip_tag = gmsh::model::addPhysicalGroup(2, no_slip_ln_tags);
-        //unused_tag = gmsh::model::addPhysicalGroup(2, unused_ln_tags);
-        
-        // For homogenization
-        top_tag = gmsh::model::addPhysicalGroup(2, top_ln_tags);
-        bottom_tag = gmsh::model::addPhysicalGroup(2, bottom_ln_tags);
-        left_tag = gmsh::model::addPhysicalGroup(2, left_ln_tags);
-        right_tag = gmsh::model::addPhysicalGroup(2, right_ln_tags);
-        front_tag = gmsh::model::addPhysicalGroup(2, front_ln_tags);
-        back_tag = gmsh::model::addPhysicalGroup(2, back_ln_tags);
-        inner_tag = gmsh::model::addPhysicalGroup(2, inner_geo_ln_tags);
+        if (simulation_type == "homogenization closure") {
+            top_tag = gmsh::model::addPhysicalGroup(2, top_ln_tags);
+            bottom_tag = gmsh::model::addPhysicalGroup(2, bottom_ln_tags);
+            left_tag = gmsh::model::addPhysicalGroup(2, left_ln_tags);
+            right_tag = gmsh::model::addPhysicalGroup(2, right_ln_tags);
+            front_tag = gmsh::model::addPhysicalGroup(2, front_ln_tags);
+            back_tag = gmsh::model::addPhysicalGroup(2, back_ln_tags);
+            inner_tag = gmsh::model::addPhysicalGroup(2, inner_geo_ln_tags);
+        }
+        else {
+            inlet_tag = gmsh::model::addPhysicalGroup(2, left_ln_tags);
+            outlet_tag = gmsh::model::addPhysicalGroup(2, right_ln_tags);
+            no_slip_tag = gmsh::model::addPhysicalGroup(2, no_slip_ln_tags);
+            //unused_tag = gmsh::model::addPhysicalGroup(2, unused_ln_tags);
+        }
     }
     else
     {
@@ -723,16 +725,20 @@ int main(int argc, char **argv)
             }
         }
         
-        // Define the no-slip tags
-        no_slip_tag = gmsh::model::addPhysicalGroup(1, no_slip_ln_tags);
-        //unused_tag = gmsh::model::addPhysicalGroup(1, unused_ln_tags);
 
-        // For Homogenization
-        top_tag = gmsh::model::addPhysicalGroup(1, top_ln_tags);
-        bottom_tag = gmsh::model::addPhysicalGroup(1, bottom_ln_tags);
-        left_tag = gmsh::model::addPhysicalGroup(1, left_ln_tags);
-        right_tag = gmsh::model::addPhysicalGroup(1, right_ln_tags);
-        inner_tag = gmsh::model::addPhysicalGroup(1, inner_geo_ln_tags);
+
+        if (simulation_type == "homogenization closure") {
+            top_tag = gmsh::model::addPhysicalGroup(1, top_ln_tags);
+            bottom_tag = gmsh::model::addPhysicalGroup(1, bottom_ln_tags);
+            left_tag = gmsh::model::addPhysicalGroup(1, left_ln_tags);
+            right_tag = gmsh::model::addPhysicalGroup(1, right_ln_tags);
+            inner_tag = gmsh::model::addPhysicalGroup(1, inner_geo_ln_tags);
+        }
+        else {
+            // Define the no-slip tags
+            no_slip_tag = gmsh::model::addPhysicalGroup(1, no_slip_ln_tags);
+            //unused_tag = gmsh::model::addPhysicalGroup(1, unused_ln_tags);
+        }
     }
     
 
@@ -800,40 +806,49 @@ int main(int argc, char **argv)
     AR_dict["neighbors"] = AR_neighbors;
     bdr_tag_file_new["AR"] = &AR_dict;
     
-
-    // Create the Stokes sub-dictionary (containing tags for BCs in the Stokes problem)
-    stokes_dict["inlet1"] = inlet_tag;
-    stokes_dict["inlet1 AR neighbors"] = inlet_AR_neighbors;
-    stokes_dict["noslip1"] = no_slip_tag;
-    bdr_tag_file_new["stokes"] = &stokes_dict;
-
-
-    // Create the scalar closure sub-dictionary (containing tags for BCs in the scalar closure problem)
-    transport_dict["inlet1"] = inlet_tag;
-    transport_dict["inlet1 AR neighbors"] = inlet_AR_neighbors;
-    transport_dict["outlet1"] = outlet_tag;
-    transport_dict["outlet1 AR neighbors"] = outlet_AR_neighbors;
-    // Create the boundary physical groups defined by the user
-    if (!is3D && pg_names.size() != 0) {
-        // Add the physical groups, where the belonging lines tags were previous obtained. We add them here so that they can be observed in gmsh.exe (i.e., they overlay the no-slip tags; the lines are tagged as belonging to both physics groups, but in gmsh.exe, this allows for viewing of the user defined boundary physical groups)
-        std::vector<int> pg_cut_inds_pgs;
-        for (int i_pg = 0; i_pg < pg_ln_tags.size(); i_pg++) { pg_cut_inds_pgs.push_back( gmsh::model::addPhysicalGroup(1, pg_ln_tags[i_pg]) ); }
-        for (int i_pg = 0; i_pg < pg_cut_inds_pgs.size(); i_pg++) { transport_dict[pg_names[i_pg]] = pg_cut_inds_pgs[i_pg]; }
-    }
-    bdr_tag_file_new["scalar_closure"] = &transport_dict;
     
 
-    // Create the homogenization sub-dictionary (containing tags for BCs in the classical closure problem)
-    homogenization_dict["top"] = top_tag;
-    homogenization_dict["bottom"] = bottom_tag;
-    homogenization_dict["left"] = left_tag;
-    homogenization_dict["right"] = right_tag;
-    homogenization_dict["inner"] = inner_tag;
-    if (is3D == 1) {
-        homogenization_dict["front"] = front_tag;
-        homogenization_dict["back"] = back_tag;
+    // -----------------------
+    //      Create the appropriate tags for the simulation type
+    // -----------------------
+    if (simulation_type == "homogenization closure")
+    {
+        // Create the homogenization sub-dictionary (containing tags for BCs in the classical closure problem)
+        homogenization_dict["top"] = top_tag;
+        homogenization_dict["bottom"] = bottom_tag;
+        homogenization_dict["left"] = left_tag;
+        homogenization_dict["right"] = right_tag;
+        homogenization_dict["inner"] = inner_tag;
+        if (is3D == 1) {
+            homogenization_dict["front"] = front_tag;
+            homogenization_dict["back"] = back_tag;
+        }
+        bdr_tag_file_new["homogenization"] = &homogenization_dict;
     }
-    bdr_tag_file_new["homogenization"] = &homogenization_dict;
+    else
+    {
+        // Create the Stokes sub-dictionary (containing tags for BCs in the Stokes problem)
+        stokes_dict["inlet1"] = inlet_tag;
+        stokes_dict["inlet1 AR neighbors"] = inlet_AR_neighbors;
+        stokes_dict["noslip1"] = no_slip_tag;
+        bdr_tag_file_new["stokes"] = &stokes_dict;
+
+
+        // Create the scalar closure sub-dictionary (containing tags for BCs in the scalar closure problem)
+        transport_dict["inlet1"] = inlet_tag;
+        transport_dict["inlet1 AR neighbors"] = inlet_AR_neighbors;
+        transport_dict["outlet1"] = outlet_tag;
+        transport_dict["outlet1 AR neighbors"] = outlet_AR_neighbors;
+        // Create the boundary physical groups defined by the user
+        if (!is3D && pg_names.size() != 0) {
+            // Add the physical groups, where the belonging lines tags were previous obtained. We add them here so that they can be observed in gmsh.exe (i.e., they overlay the no-slip tags; the lines are tagged as belonging to both physics groups, but in gmsh.exe, this allows for viewing of the user defined boundary physical groups)
+            std::vector<int> pg_cut_inds_pgs;
+            for (int i_pg = 0; i_pg < pg_ln_tags.size(); i_pg++) { pg_cut_inds_pgs.push_back( gmsh::model::addPhysicalGroup(1, pg_ln_tags[i_pg]) ); }
+            for (int i_pg = 0; i_pg < pg_cut_inds_pgs.size(); i_pg++) { transport_dict[pg_names[i_pg]] = pg_cut_inds_pgs[i_pg]; }
+        }
+        bdr_tag_file_new["scalar_closure"] = &transport_dict;
+    }
+
 
 
     // Create the mesh geometry dictionary

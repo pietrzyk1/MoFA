@@ -140,7 +140,7 @@ void createUnitTestUpscaledConfig(string &project_dir, string &config_file_name,
         istringstream transportClosureDict_stream = createTransportClosureDict(project_dir,
             2, periodicity, 1, 1, 0,
             1.0, 1.0, {0.0},
-            1, 1, 0,
+            1, 1, 1,
             0.0, 1.0, 0.15,
             10000, 1.0e-13, 1.0e-8);
         closureDict.loadFromStream( transportClosureDict_stream );
