@@ -137,3 +137,10 @@ Post_Processing/Porescale_Avger/bin/*
 Post_Processing/Porescale_Avger/build/*
 !Post_Processing/Porescale_Avger/build/.gitkeep
 
+# Post Processing: Residual Calc
+Post_Processing/Residual_Calc/
+#Post_Processing/Residual_Calc/bin/*
+#!Post_Processing/Residual_Calc/bin/.gitkeep
+#Post_Processing/Residual_Calc/build/*
+#!Post_Processing/Residual_Calc/build/.gitkeep
+

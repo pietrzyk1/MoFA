@@ -201,6 +201,11 @@ int main(int argc, char **argv)
     string output_file_path = output_dir + output_file_name;
     string mesh_info_file_path = mesh_info_dir + mesh_info_file_name;
     
+    // Make vectors L, ell, and N_AR (eventually, input should just give L, ell, and N_AR as vectors, not the components)
+    std::vector<double> L = {L_x, L_y}; if (is3D == 1) { L.push_back( L_z ); }
+    std::vector<double> ell = {ell_x, ell_y}; if (is3D == 1) { ell.push_back( ell_z ); }
+    std::vector<int> N_AR = {N_AR_x, N_AR_y}; if (is3D == 1) { N_AR.push_back( N_AR_z ); }
+
     
     // ===============================================================
     //   Define the option parser and add options that can be changed from the command line
@@ -231,8 +236,8 @@ int main(int argc, char **argv)
     std::vector<std::vector<int>> AR_neighbors_OLD; // Outer vector has N_AR slots; inner vector is a list of all neighboring AR numbers (Not really needed anymore? We get them later after AR merge)
     
     bool makeUniformARBackground = false;
-    if (is3D) { if (makeUniformARBackground) { MakeARMesh_Uniform3DRectangular({N_AR_x, N_AR_y, N_AR_z}, {ell_x, ell_y, ell_z}, {L_x, L_y, L_z}, ARs_uc, ARs_uc_geo_3D); } }
-    else { MakeARMesh_Uniform2DRectangular({N_AR_x, N_AR_y}, {ell_x, ell_y}, {L_x, L_y}, ARs_uc, ARs_uc_geo, AR_neighbors_OLD); } 
+    if (is3D == 1) { if (makeUniformARBackground) { MakeARMesh_Uniform3DRectangular(N_AR, ell, L, ARs_uc, ARs_uc_geo_3D); } }
+    else { MakeARMesh_Uniform2DRectangular(N_AR, ell, L, ARs_uc, ARs_uc_geo, AR_neighbors_OLD); }
     
     
     // ========================================
@@ -270,32 +275,36 @@ int main(int argc, char **argv)
             
             // TODO: allow for more than 10 boxes.
             string importAndCutMethod = "import and cut STL";
-            if (importAndCutMethod == "import and cut STL") {
-                std::vector<std::vector<double>> AR_planes;
-                assert (N_AR_x == 10 && N_AR_y == 10 && N_AR_z == 10);
-                if (simulation_type == "upscaled" || simulation_type == "homogenization closure") {
-                    AR_planes = {{-5.0, -4.0, -3.0, -2.0, -1.0, 0.0, 1.0, 2.0, 3.0, 4.0, 5.0},
-                                 {-5.0, -4.0, -3.0, -2.0, -1.0, 0.0, 1.0, 2.0, 3.0, 4.0, 5.0},
-                                 {-5.0, -4.0, -3.0, -2.0, -1.0, 0.0, 1.0, 2.0, 3.0, 4.0, 5.0}};
-                    //AR_planes = {{-0.5, -0.4, -0.3, -0.2, -0.1, 0.0, 0.1, 0.2, 0.3, 0.4, 0.5},
-                    //             {-0.5, -0.4, -0.3, -0.2, -0.1, 0.0, 0.1, 0.2, 0.3, 0.4, 0.5},
-                    //             {-0.5, -0.4, -0.3, -0.2, -0.1, 0.0, 0.1, 0.2, 0.3, 0.4, 0.5}};
+            if (importAndCutMethod == "import and cut STL")
+            {
+                // Define the AR cut planes based on L, ell, and N_AR
+                std::vector<std::vector<double>> AR_planes(L.size());
+                for (int i_d = 0; i_d < L.size(); i_d++) {
+                    // Make sure the provided L, ell, and N_AR make sense for the dimension
+                    assert (L[i_d]/N_AR[i_d] == ell[i_d]);
+                    
+                    // Create the vector for the AR_planes in the i_d dimension and add it to AR_planes
+                    double tol = 1.0e-8;
+                    std::vector<double> AR_planes_dim(N_AR[i_d] + 1); AR_planes_dim[0] = -L[i_d]/2.0;
+                    for (int i_p = 1; i_p < N_AR[i_d] + 1; i_p++) {
+                        AR_planes_dim[i_p] = (abs(AR_planes_dim[i_p - 1] + ell[i_d]) > tol) ? AR_planes_dim[i_p - 1] + ell[i_d] : 0.0;
+                    }
+                    AR_planes[i_d] = AR_planes_dim;
                 }
-                else if (simulation_type == "porescale") {
-                    AR_planes = {{-0.5, -0.4, -0.3, -0.2, -0.1, 0.0, 0.1, 0.2, 0.3, 0.4, 0.5},
-                                 {-0.5, -0.4, -0.3, -0.2, -0.1, 0.0, 0.1, 0.2, 0.3, 0.4, 0.5},
-                                 {-0.5, -0.4, -0.3, -0.2, -0.1, 0.0, 0.1, 0.2, 0.3, 0.4, 0.5}};
-                }
-                else {
-                    cerr << "generate_mesh.cpp: CRITICAL ERROR: Unknown string assigned to 'simulation_type'." << endl;
-                    exit(1);
-                }
+
+                // For debugging
+                //AR_planes = {{-5.0, -4.0, -3.0, -2.0, -1.0, 0.0, 1.0, 2.0, 3.0, 4.0, 5.0},
+                //             {-5.0, -4.0, -3.0, -2.0, -1.0, 0.0, 1.0, 2.0, 3.0, 4.0, 5.0},
+                //             {-5.0, -4.0, -3.0, -2.0, -1.0, 0.0, 1.0, 2.0, 3.0, 4.0, 5.0}};
+                //AR_planes = {{-0.5, -0.4, -0.3, -0.2, -0.1, 0.0, 0.1, 0.2, 0.3, 0.4, 0.5},
+                //             {-0.5, -0.4, -0.3, -0.2, -0.1, 0.0, 0.1, 0.2, 0.3, 0.4, 0.5},
+                //             {-0.5, -0.4, -0.3, -0.2, -0.1, 0.0, 0.1, 0.2, 0.3, 0.4, 0.5}};
                 
                 ARs = importAndCutSTLVolume(geometry_file_path, geo_scale, AR_planes);
                 //gmsh::write("my_model.geo_unrolled"); // For debugging. Writes a (dense/heavy) file of the current gmsh model geometry
-                //exit(1);
             }
-            else {
+            else
+            {
                 assert (makeUniformARBackground);
                 // Imports geometry from an STL file (i.e., the triangles); makes the STL triangles gmsh surfaces;
                 // makes a surface loop with the triangles; makes a gmsh volume with the surface loop. Then, uses
@@ -365,7 +374,7 @@ int main(int argc, char **argv)
         if (is3D) { cout << "generate_mesh.cpp: main(): NOTE: Defining boundary physical groups for 3D is not implemented yet. No boundary physical groups will be defined, except for the top, bottom, left, and right sides of the domain." << endl; }
         else {
             // Get the post-cut tags of the tool lines
-            getToolGeoTags(pg_cut_inds, entity_tags_in_AR, tool_geo, {-L_x/2.0, L_x/2.0, -L_y/2.0, L_y/2.0}, pg_ln_tags);
+            getToolGeoTags(pg_cut_inds, entity_tags_in_AR, tool_geo, {-L[0]/2.0, L[0]/2.0, -L[1]/2.0, L[1]/2.0}, pg_ln_tags);
         }
         cout << "    Complete!" << endl;
     }
@@ -395,7 +404,7 @@ int main(int argc, char **argv)
         // Separate the tags of the surfaces at the domain boundaries (i.e., at +-L_x, +-L_y, and +-L_z) from the rest of the surface tags.
         // The remaining surface tags (in domain_boundary_tags[6]) are the cut geometry boundaries
         cout << "generate_mesh.cpp: Separating the domain boundary tags from cut surface/volume tags..." << endl;
-        getDomainBoundarySurfaceTags(entity_tags_in_AR, domain_boundary_tags, {L_x, L_y, L_z});
+        getDomainBoundarySurfaceTags(entity_tags_in_AR, domain_boundary_tags, L);
         top_ln_tags = domain_boundary_tags[0];
         bottom_ln_tags = domain_boundary_tags[1];
         left_ln_tags = domain_boundary_tags[2];
@@ -571,7 +580,7 @@ int main(int argc, char **argv)
         // Separate the tags of the lines at the domain boundaries (i.e., at +-L_x and +-L_y) from the rest of the line tags.
         // The remaining line tags (in domain_boundary_tags[4]) are the cut geometry boundaries
         cout << "generate_mesh.cpp: Separating the domain boundary tags from cut surface/volume tags..." << endl;
-        getDomainBoundaryLineTags(entity_tags_in_AR, domain_boundary_tags, ARs, boundary_neighbor_AR_tags, L_x, L_y, min_elem_size * 0.01); // tolerance can be changed here if needed.
+        getDomainBoundaryLineTags(entity_tags_in_AR, domain_boundary_tags, ARs, boundary_neighbor_AR_tags, L[0], L[1], min_elem_size * 0.01); // tolerance can be changed here if needed.
         top_ln_tags = domain_boundary_tags[0];
         right_ln_tags = domain_boundary_tags[1];
         bottom_ln_tags = domain_boundary_tags[2];
@@ -749,33 +758,33 @@ int main(int argc, char **argv)
     cout << "generate_mesh.cpp: Preparing mesh for periodic boundary conditions (if needed/in input file)..." << endl;
     if (is3D) {
         if (isPeriodic[0] == 1) {
-            for (int i = 0; i < left_ln_tags.size(); i++) { gmsh::model::geo::mesh::setTransfiniteCurve(left_ln_tags[i], (int)(L_y*L_z/min_elem_size)); }
-            for (int i = 0; i < right_ln_tags.size(); i++) { gmsh::model::geo::mesh::setTransfiniteCurve(right_ln_tags[i], (int)(L_y*L_z/min_elem_size)); }
+            for (int i = 0; i < left_ln_tags.size(); i++) { gmsh::model::geo::mesh::setTransfiniteCurve(left_ln_tags[i], (int)(L[1]*L[2]/min_elem_size)); }
+            for (int i = 0; i < right_ln_tags.size(); i++) { gmsh::model::geo::mesh::setTransfiniteCurve(right_ln_tags[i], (int)(L[1]*L[2]/min_elem_size)); }
         }
         if (isPeriodic[1] == 1) {
-            for (int i = 0; i < bottom_ln_tags.size(); i++) { gmsh::model::geo::mesh::setTransfiniteCurve(bottom_ln_tags[i], (int)(L_x*L_z/min_elem_size)); }
-            for (int i = 0; i < top_ln_tags.size(); i++) { gmsh::model::geo::mesh::setTransfiniteCurve(top_ln_tags[i], (int)(L_x*L_z/min_elem_size)); }
+            for (int i = 0; i < bottom_ln_tags.size(); i++) { gmsh::model::geo::mesh::setTransfiniteCurve(bottom_ln_tags[i], (int)(L[0]*L[2]/min_elem_size)); }
+            for (int i = 0; i < top_ln_tags.size(); i++) { gmsh::model::geo::mesh::setTransfiniteCurve(top_ln_tags[i], (int)(L[0]*L[2]/min_elem_size)); }
         }
         if (isPeriodic[2] == 1) {
-            for (int i = 0; i < back_ln_tags.size(); i++) { gmsh::model::geo::mesh::setTransfiniteCurve(back_ln_tags[i], (int)(L_x*L_y/min_elem_size)); }
-            for (int i = 0; i < front_ln_tags.size(); i++) { gmsh::model::geo::mesh::setTransfiniteCurve(front_ln_tags[i], (int)(L_x*L_y/min_elem_size)); }
+            for (int i = 0; i < back_ln_tags.size(); i++) { gmsh::model::geo::mesh::setTransfiniteCurve(back_ln_tags[i], (int)(L[0]*L[1]/min_elem_size)); }
+            for (int i = 0; i < front_ln_tags.size(); i++) { gmsh::model::geo::mesh::setTransfiniteCurve(front_ln_tags[i], (int)(L[0]*L[1]/min_elem_size)); }
         }
         gmsh::model::geo::synchronize();
     }
     else {
         if (isPeriodic[0] == 1) {
             for (int i = 0; i < left_ln_tags.size(); i++) {
-                gmsh::model::geo::mesh::setTransfiniteCurve(left_ln_tags[i], (int)(ell_y/min_elem_size)); } // update: this should probably be the (length of each left_ln_tags) / min_elem_size
+                gmsh::model::geo::mesh::setTransfiniteCurve(left_ln_tags[i], (int)(ell[1]/min_elem_size)); } // update: this should probably be the (length of each left_ln_tags) / min_elem_size
                 //double tag_length; gmsh::model::occ::getMass(1, left_ln_tags[i], tag_length);
                 //gmsh::model::geo::mesh::setTransfiniteCurve(left_ln_tags[i], (int)(tag_length/min_elem_size)); } // update: this should probably be the (length of each left_ln_tags) / min_elem_size
             for (int i = 0; i < right_ln_tags.size(); i++) {
-                gmsh::model::geo::mesh::setTransfiniteCurve(right_ln_tags[i], (int)(ell_y/min_elem_size)); } // update: this should probably be the (length of each left_ln_tags) / min_elem_size
+                gmsh::model::geo::mesh::setTransfiniteCurve(right_ln_tags[i], (int)(ell[1]/min_elem_size)); } // update: this should probably be the (length of each left_ln_tags) / min_elem_size
                 //double tag_length; gmsh::model::occ::getMass(1, right_ln_tags[i], tag_length);
                 //gmsh::model::geo::mesh::setTransfiniteCurve(right_ln_tags[i], (int)(tag_length/min_elem_size)); } // update: this should probably be the (length of each left_ln_tags) / min_elem_size
         }
         if (isPeriodic[1] == 1) {
-            for (int i = 0; i < bottom_ln_tags.size(); i++) { gmsh::model::geo::mesh::setTransfiniteCurve(bottom_ln_tags[i], (int)(L_x/min_elem_size)); }
-            for (int i = 0; i < top_ln_tags.size(); i++) { gmsh::model::geo::mesh::setTransfiniteCurve(top_ln_tags[i], (int)(L_x/min_elem_size)); }
+            for (int i = 0; i < bottom_ln_tags.size(); i++) { gmsh::model::geo::mesh::setTransfiniteCurve(bottom_ln_tags[i], (int)(L[0]/min_elem_size)); }
+            for (int i = 0; i < top_ln_tags.size(); i++) { gmsh::model::geo::mesh::setTransfiniteCurve(top_ln_tags[i], (int)(L[0]/min_elem_size)); }
         }
         gmsh::model::geo::synchronize();
     }
@@ -797,8 +806,8 @@ int main(int argc, char **argv)
     if (anything_Merged) { AR_dict["total_areas"] = AR_pore_space_areas; AR_dict["area_type"] = "pore"; }
     else {
         vector<double> AR_areas;
-        if (is3D) { for (int i_ar = 0; i_ar < AR_tags.size(); i_ar++) { AR_areas.push_back( (double)(ell_x*ell_y*ell_z) ); } }
-        else { for (int i_ar = 0; i_ar < AR_tags.size(); i_ar++) { AR_areas.push_back( (double)(ell_x*ell_y) ); } }
+        if (is3D) { for (int i_ar = 0; i_ar < AR_tags.size(); i_ar++) { AR_areas.push_back( (double)(ell[0]*ell[1]*ell[2]) ); } }
+        else { for (int i_ar = 0; i_ar < AR_tags.size(); i_ar++) { AR_areas.push_back( (double)(ell[0]*ell[1]) ); } }
         AR_dict["total_areas"] = AR_areas;
         AR_dict["area_type"] = "AR";
     }
@@ -852,8 +861,8 @@ int main(int argc, char **argv)
 
 
     // Create the mesh geometry dictionary
-    geometry["L"] = {L_x, L_y, L_z};
-    geometry["l"] = {ell_x, ell_y, ell_z};
+    geometry["L"] = L; //{L_x, L_y, L_z};
+    geometry["l"] = ell; //{ell_x, ell_y, ell_z};
     bdr_tag_file_new["geometry"] = &geometry;
 
     // Create the simulation information dictionarys

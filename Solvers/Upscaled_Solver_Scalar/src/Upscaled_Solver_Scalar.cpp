@@ -88,7 +88,7 @@ int main(int argc, char *argv[])
 
     string mesh_dir = "./";
     string mesh_file_name = "mesh.msh";
-    unique_ptr<string> mesh_info_dir = make_unique<string>(mesh_dir);
+    string mesh_info_dir = "./";
     string mesh_info_file_name = "mesh_info.txt";
 
     int N_steps = 100;
@@ -99,15 +99,15 @@ int main(int argc, char *argv[])
     string output_file_name_prefix = "upscaled_sol_";
     string output_file_name_suffix = ".gf";
     
-    unique_ptr<string> average_output_dir = make_unique<string>(output_dir);
+    string average_output_dir = "./";
     string average_output_file_name = "upscaled_sol.txt";
     vector<string> average_solution_keys = {"avg_c"};
     
-    unique_ptr<string> mesh_output_dir = make_unique<string>(output_dir);
+    string mesh_output_dir = "./";
     string mesh_output_file_name = "mesh.mesh";
     
 
-    unique_ptr<string> residual_dir = make_unique<string>(output_dir);
+    string residual_dir = "./";
     string residual_file_name_prefix = "a_sol";
     string residual_file_name_suffix = ".txt";
 
@@ -121,10 +121,8 @@ int main(int argc, char *argv[])
     // ===============================================================
     //   Search for config file path in argv (i.e., command line options) 
     // ===============================================================
-    for (int i = 1; i < argc; i++)
-    {
-        if ((string(argv[i]) == "-C" || string(argv[i]) == "--config_path") && i + 1 < argc)
-        {
+    for (int i = 1; i < argc; i++) {
+        if ((string(argv[i]) == "-C" || string(argv[i]) == "--config_path") && i + 1 < argc) {
             config_path = argv[i + 1];
             cout << globalVars.FILENAME << ": Configuration path obtained from parser options: " << config_path << endl;
             break;
@@ -202,11 +200,11 @@ int main(int argc, char *argv[])
 
     // Initialize paths and file names from the parts taken from the defaults (either in the variable declarations or the config file)
     string mesh_file_path = mesh_dir + mesh_file_name;
-    string mesh_info_file_path = *mesh_info_dir + mesh_info_file_name;
-    string residual_file_path = *residual_dir + residual_file_name_prefix + residual_file_name_suffix;
+    string mesh_info_file_path = mesh_info_dir + mesh_info_file_name;
+    string residual_file_path = residual_dir + residual_file_name_prefix + residual_file_name_suffix;
     
-    string average_output_file_path = *average_output_dir + average_output_file_name;
-    string mesh_output_file_path = *mesh_output_dir + mesh_output_file_name;
+    string average_output_file_path = average_output_dir + average_output_file_name;
+    string mesh_output_file_path = mesh_output_dir + mesh_output_file_name;
 
     
     // ===============================================================

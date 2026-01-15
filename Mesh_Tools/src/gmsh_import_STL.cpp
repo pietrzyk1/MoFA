@@ -1308,7 +1308,7 @@ std::vector<std::pair<int, int>> importAndCutSTLVolume(const string &STL_file_pa
                 AR_bounding_surfs[AR_bounding_surfs.size() - 1].push_back( surf );
                 surf.Set(2, AR_planes[2][i_z], {0, 1}, {{AR_planes[0][i_x], AR_planes[0][i_x + 1]}, {AR_planes[1][i_y], AR_planes[1][i_y + 1]}});
                 AR_bounding_surfs[AR_bounding_surfs.size() - 1].push_back( surf );
-
+                
                 if (i_x == AR_planes[0].size() - 2) {
                     surf.Set(0, AR_planes[0][i_x + 1], {1, 2}, {{AR_planes[1][i_y], AR_planes[1][i_y + 1]}, {AR_planes[2][i_z], AR_planes[2][i_z + 1]}});
                     AR_bounding_surfs[AR_bounding_surfs.size() - 1].push_back( surf ); }
@@ -1321,7 +1321,7 @@ std::vector<std::pair<int, int>> importAndCutSTLVolume(const string &STL_file_pa
             }
         }
     }
-
+    
     // Initiate the ARGridManager
     ARGridManager AR_corner_pts(AR_planes, tol);
 

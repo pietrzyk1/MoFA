@@ -21,20 +21,22 @@ cmake_minimum_required(VERSION ${CMAKE_MIN_VERSION})
 # Tell CMake the project name and version to be built
 project(Upscaled_Solver_Scalar)
 
-
-# Tell CMake the directory containing the project's header files (i.e., the .h files). This is often in the /include directory.
-include_directories(${MFEM_SOURCE_DIR})
-include_directories(${UTILITY_SOURCE_DIR}/include)
-
-# Tell CMake the directory containing the project's library files (i.e., the .a, .so, or .lib files). This is often the ./lib directory.
-link_directories(${MFEM_SOURCE_DIR})
-
-
 # Set the executable to be created in the bin directory of the project source directory
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${PROJECT_SOURCE_DIR}/bin)
+
+# Tell CMake any global directories containing the project's header files (i.e., the .h files). This is often in the /include directory.
+include_directories(${UTILITY_SOURCE_DIR}/include)
+
+
 
 # Add the executable we want to build. The first argument will be the name of the produced executable..
 add_executable(upscaled_solver_scalar ${PROJECT_SOURCE_DIR}/src/Upscaled_Solver_Scalar.cpp ${UTILITY_SOURCE_DIR}/src/JSON_IO.cpp ${UTILITY_SOURCE_DIR}/src/mfem_util.cpp)
 
+# Tell CMake the directory containing the project's library files (i.e., the .a, .so, or .lib files). This is often the ./lib directory.
+target_link_directories(upscaled_solver_scalar PRIVATE ${MFEM_SOURCE_DIR})
+
+# Tell CMake any directories containing the project's header files (i.e., the .h files). This is often the ./include directories.
+target_include_directories(upscaled_solver_scalar PRIVATE ${MFEM_SOURCE_DIR})
+
 # Tell CMake to link the project's libraries to the executable. If you told CMake the directories containing the project's libraries in "link_directories", you can simply put the library names in the second argument. Otherwise, put the full path to the library file (i.e., the .a, .so, or .lib file) in the second argument.
-target_link_libraries(upscaled_solver_scalar libmfem.a)
+target_link_libraries(upscaled_solver_scalar PRIVATE libmfem.a)
