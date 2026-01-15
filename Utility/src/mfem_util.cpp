@@ -14,6 +14,7 @@ lL.lH.*/
 #include <iostream>
 #include <cassert>
 #include <chrono>
+#include <map>
 #include "mfem_util.h"
 
 // ML packages
@@ -672,6 +673,494 @@ SparseMatrix AveragingOperator::GetAR_areas_SpMat()
 
 
 
+#ifdef MPI_BUILD
+    // ===============================================================
+    //   Define the functions for the ParAveragingOperator class.
+    // ===============================================================
+    // Function for identifying the rows of the final averaging operator that each rank will receive. The output will be
+    // a map row_ind -> rank ID
+    void ParAveragingOperator::InitializeReceivingRankInfo()
+    {
+        // Identify which ranks will be receiving the row data of the final averaging operator from all other ranks
+        //recv_ranks.resize(N_rows); for (int i = 0; i < N_rows; i++) { recv_ranks[i] = -1; }
+        for (int i_res = 0; i_res < N_rows; i_res++) {
+            recv_ranks.push_back( -1 );
+            for (int i_rank = 0; i_rank < N_ranks; i_rank++) {
+                if (i_res >= row_starts[i_rank] && i_res < row_starts[i_rank + 1]) { recv_ranks[i_res] = i_rank; break; } }
+            if (recv_ranks[i_res] == -1) { cerr << "ParAveragingOperator::GetReceivingRanks(): CRITICAL ERROR: Could not identify the receiving rank of row " << i_res << " in the averaging matrix." << endl; exit(1); }
+        }
+
+        // From recv_ranks, determine how many rows of the final averaging operator are owned by this rank. Also
+        // determine which AR and vdim each DOF/row belongs to (this will be used for applying the averaging operator in parallel)
+        for (int i_row = 0; i_row < recv_ranks.size(); i_row++) {
+            if (recv_ranks[i_row] == rank) {
+                N_rows_owned += 1;
+                local_row_to_AR_index.push_back( i_row % N_AR );
+                //local_row_to_vdim_index.push_back( (i_row - (i_row % N_AR)) / N_AR );
+            }
+        }
+        assert ( N_rows_owned == row_starts[rank + 1] - row_starts[rank] );
+    }
+    
+    // Function for creating the dummy avg finite element space that will be used to generate the averaging operator
+    void ParAveragingOperator::CreateDummyFESpace(ParMesh *mesh_, const int vdim_)
+    {
+        // Finite element space that will be used to create the average space
+        fec_avg = make_unique<L2_FECollection>(0, mesh_->Dimension());
+        fespace_avg = make_unique<ParFiniteElementSpace>(mesh_, &*fec_avg, vdim_);
+
+        // Get the number of DOFs per vector component of FiniteElementCollection
+        DOFs_per_vdim = fec_avg->GetFE(mesh_->GetElementBaseGeometry(0), 0)->GetDof();
+    }
+
+    // Function for creating the bilinear form used to generate the averaging operator
+    void ParAveragingOperator::CreateBilinearForm(ParFiniteElementSpace *fespace_)
+    {
+        // Initiate a mixed bilinear form between the concentration space and the dummy average space
+        varf_avg = make_unique<ParMixedBilinearForm>(fespace_, &*fespace_avg);
+        ConstantCoefficient one(1);
+        if (fespace_avg->GetVDim() == 1) { varf_avg->AddDomainIntegrator(new MixedScalarMassIntegrator(one)); }
+        else { varf_avg->AddDomainIntegrator(new VectorMassIntegrator(one)); }
+        varf_avg->Assemble();
+        varf_avg->Finalize();
+    }
+
+    // Function for getting 1.) the indices of elements inside each AR, and 2.) the indices of dofs (in the dummy space) of each element inside each AR
+    void ParAveragingOperator::GetARIndices(ParMesh *mesh_, vector<int> AR_tags)
+    {
+        if (upscaling_theory == "MoFA")
+        {
+            // Define default AR_tags (i.e., {1, 2, ..., N_AR}) if not provided
+            if (AR_tags.size() == 1 && AR_tags[0] == -1) { AR_tags[0] = 1; for (int i = 1; i < N_AR; i++) { AR_tags.push_back( i + 1 ); } }
+            
+            // Get the indices of the elements inside each averaging region
+            for (int i_Elem = 0; i_Elem < mesh_->GetNE(); i_Elem++) {
+                for (int i_AR = 0; i_AR < N_AR; i_AR++) {
+                    if (mesh_->GetAttribute(i_Elem) == AR_tags[i_AR]) {
+                        AR_Elem_inds[i_AR].push_back(i_Elem);
+                        break;
+                    }
+                }
+            }
+        }
+        else if (upscaling_theory == "Homogenization")
+        {
+            // Get the indices of all elements inside the domain (as the average is taken over the whole unit-cell)
+            for (int i_Elem = 0; i_Elem < mesh_->GetNE(); i_Elem++) { AR_Elem_inds[0].push_back(i_Elem); }
+        }
+
+        // Get the indices of the DOFS in the dummy avg-space of each element inside each averaging region
+        Array<int> Elem_DOFs;
+        for (int i_AR = 0; i_AR < N_AR; i_AR++)
+        {
+            for (int i_Elem = 0; i_Elem < AR_Elem_inds[i_AR].size(); i_Elem++)
+            {
+                fespace_avg->GetElementVDofs(AR_Elem_inds[i_AR][i_Elem], Elem_DOFs); // GetElementVDofs apparently outputs dofs like [dof_x^1, dof_x^2, dof_y^1, dof_y^2, ...]
+                assert (Elem_DOFs.Size() == DOFs_per_vdim * vdim);
+                for (int i_vd = 0; i_vd < vdim; i_vd++)
+                {
+                    AR_Dof_inds[i_vd][i_AR].insert(AR_Dof_inds[i_vd][i_AR].end(), Elem_DOFs.begin() + i_vd*DOFs_per_vdim, Elem_DOFs.begin() + (i_vd + 1)*DOFs_per_vdim);
+                }
+            }
+        }
+    }
+
+    // Function for creating the averaging operator from the avg space and mixed bilinear form
+    void ParAveragingOperator::CreateAvgOperator(const double tol)
+    {
+        PrepareUnweightedAvgOperator(tol);
+    }
+
+    // Function for creating the averaging operator from the avg space and mixed bilinear form. Depending on the avg space/mixed bilinear form used,
+    // the produced avg_mat is either \integral(1 * \basis) or \integral(\basis * \basis) summed over the elements of each AR box.
+    void ParAveragingOperator::PrepareUnweightedAvgOperator(const double tol)
+    {
+        // Get the HypreParMatrix of the bilinear form
+        HypreParMatrix *varf_avg_HPM = varf_avg->ParallelAssemble();
+
+        // Get the diagonal matrix and corresponding information from the bilinear form HypreParMatrix
+        SparseMatrix varf_Dmat; varf_avg_HPM->GetDiag(varf_Dmat);
+        int N_cols_owned = varf_Dmat.NumCols();
+        
+        // Get the off-diagonal matrix and corresponding information from the bilinear form HypreParMatrix
+        HYPRE_BigInt *varf_colMap; SparseMatrix varf_ODmat;
+        varf_avg_HPM->GetOffd(varf_ODmat, varf_colMap);
+        HYPRE_BigInt *varf_col_starts = varf_avg_HPM->GetColStarts(); // NOTE: This function only provides 2 components: the start (inclusive) and end (exclusive) columns of the rank. Do not try to access more than components 0 and 1
+
+
+
+        // Initialize the matrices for holding the summed rows (according to AR_Dof_inds) of the diagonal and off-diagonal matrices.
+        // Also initialize the vector for holding the AR areas
+        SparseMatrix varf_Dmat_summed(N_rows, N_cols_owned);
+        SparseMatrix varf_ODmat_summed(N_rows, varf_ODmat.NumCols());
+        AR_areas = Array<double>(N_AR);
+        
+        // Create the summed-row matrices from the diagonal and off-diagonal matrices. Also alter the AR_areas vector
+        CreateLocalAvgOperator(varf_Dmat, AR_Dof_inds, varf_Dmat_summed, AR_areas, tol);
+        CreateLocalAvgOperator(varf_ODmat, AR_Dof_inds, varf_ODmat_summed, AR_areas, tol);
+
+        // Finalize the summed-row matrices before integrating them into the HypreParMatrix
+        varf_Dmat_summed.Finalize();
+        varf_ODmat_summed.Finalize();
+
+
+
+        // Send AR_areas to receiving_rank, and sum them on receiving_rank. Then, broadcast the result so that all ranks have the same AR_area
+        int receiving_rank = 0;
+        vector<Array<double>> AR_areas_all;
+        if (rank == receiving_rank) {
+            // Receive and store the data sent from the other ranks
+            for (int i_rank = 0; i_rank < N_ranks; i_rank++) {
+                if (i_rank == receiving_rank) { AR_areas_all.push_back( AR_areas ); } // Store the rank's own data
+                else { // Receive the other ranks' data
+                    AR_areas_all.push_back( Array<double>(N_AR) );
+                    MPI_Recv(AR_areas_all[AR_areas_all.size() - 1].GetData(), N_AR, MPI_DOUBLE, i_rank, 0, comm, MPI_STATUS_IGNORE); // Receive the data
+                }
+            }
+
+            // Sum together the AR_areas for each AR
+            AR_areas = 0.0;
+            for (int i_AR = 0; i_AR < N_AR; i_AR++) {
+                for (int i_rank = 0; i_rank < N_ranks; i_rank++) { AR_areas[i_AR] += AR_areas_all[i_rank][i_AR]; }
+            }
+
+            // Broadcast the resulting AR_areas vector
+            for (int i_rank = 0; i_rank < N_ranks; i_rank++) {
+                if (i_rank != receiving_rank) { MPI_Send(AR_areas.GetData(), N_AR, MPI_DOUBLE, i_rank, 1, comm); }
+            }
+        }
+        else {
+            // Send data to receiving_rank
+            MPI_Send(AR_areas.GetData(), N_AR, MPI_DOUBLE, receiving_rank, 0, comm);
+            // Receive data from receiving_rank
+            MPI_Recv(AR_areas.GetData(), N_AR, MPI_DOUBLE, receiving_rank, 1, comm, MPI_STATUS_IGNORE);
+        }
+        
+
+
+        // Initialize the structure that will hold the data received from other ranks (as well as this rank's own data)
+        vector<vector<pair<HYPRE_BigInt, double>>> recv_global_data;
+        
+        // For each row in the global averaging operator, pass the column indices and corresponding values to the rank declared to "own" the row
+        for (int i_res = 0; i_res < N_rows; i_res++)
+        {
+            // Get the values/columns of the current row from both the diagonal and off-diagonal matrices. Convert columns indices from both matrices to global column indices
+            Array<int> col_inds; vector<double> row_vec;
+            {
+                Array<int> col_inds_D; Vector row_D; varf_Dmat_summed.GetRow(i_res, col_inds_D, row_D);
+                for (int i = 0; i < col_inds_D.Size(); i++) { col_inds.Append( col_inds_D[i] + varf_col_starts[0] ); }
+                row_vec.insert(row_vec.end(), row_D.begin(), row_D.end());
+            }
+            {
+                Array<int> col_inds_OD; Vector row_OD; varf_ODmat_summed.GetRow(i_res, col_inds_OD, row_OD);
+                for (int i = 0; i < col_inds_OD.Size(); i++) { col_inds.Append( varf_colMap[col_inds_OD[i]] ); }
+                row_vec.insert(row_vec.end(), row_OD.begin(), row_OD.end());
+            }
+            Vector row(row_vec.data(), row_vec.size());
+            
+            // Create local integer for the size of the data to be sent
+            int N_data = col_inds.Size();
+            
+
+            // Receive/Send N_data, col_inds, and row data depending on the row ownership defined by recv_ranks
+            if (rank == recv_ranks[i_res])
+            {
+                // Initialize variable for receiving the data from other ranks
+                vector<pair<HYPRE_BigInt, double>> dummy_global_data;
+                
+                // Store the relevant part of the rank's own data
+                {
+                    vector<pair<HYPRE_BigInt, double>> temp; temp.resize(col_inds.Size());
+                    for(int i = 0; i < col_inds.Size(); i++) { temp[i] = {col_inds[i], row[i]}; }
+                    dummy_global_data.insert(dummy_global_data.end(), temp.begin(), temp.end());
+                }
+                
+                // Receive and store the data sent from the other ranks
+                for (int i_rank = 0; i_rank < N_ranks; i_rank++) {
+                    if (i_rank != rank) {
+                        // Receive the column data/column data size
+                        vector<int> col_inds_recv; int N_data_recv;
+                        MPI_Recv(&N_data_recv, 1, MPI_INT, i_rank, 0, comm, MPI_STATUS_IGNORE); // Receive the length of the data being sent
+                        col_inds_recv.resize(N_data_recv);
+                        MPI_Recv(col_inds_recv.data(), N_data_recv, MPI_INT, i_rank, 1, comm, MPI_STATUS_IGNORE); // Receive the data
+                        
+                        // Receive the value data (the size is the same as the column data)
+                        vector<double> row_data_recv(N_data_recv);
+                        MPI_Recv(row_data_recv.data(), N_data_recv, MPI_DOUBLE, i_rank, 2, comm, MPI_STATUS_IGNORE); // Receive the data
+                        
+                        // Save the column and value data in a vector of pairs for easy sorting later on
+                        vector<pair<HYPRE_BigInt, double>> temp; temp.resize(N_data_recv);
+                        for(int i = 0; i < N_data_recv; i++) { temp[i] = {col_inds_recv[i], row_data_recv[i]}; }
+                        dummy_global_data.insert(dummy_global_data.end(), temp.begin(), temp.end());
+                    }
+                }
+
+                // Store the received data for the current row i_res as a component in recv_global_data (i.e., each component of recv_global_data stores the data for a different row owned by the same rank)
+                recv_global_data.push_back( dummy_global_data );
+            }
+            else
+            {
+                // Send the column data/size of column data
+                MPI_Send(&N_data, 1, MPI_INT, recv_ranks[i_res], 0, comm); // Send the length of the data being sent
+                MPI_Send(col_inds.GetData(), N_data, MPI_INT, recv_ranks[i_res], 1, comm); // Send the data
+                // Send the value data
+                MPI_Send(row.GetData(), N_data, MPI_DOUBLE, recv_ranks[i_res], 2, comm); // Send the data
+            }
+        }
+        
+
+        
+        // Sort the pairs in recv_global_data by the column indices (first component of the pairs). Then, extract the column-value pair data
+        // into global_cols and global_vals. To do this, sum values of similar column indices
+        vector<vector<int>> global_cols; vector<vector<double>> global_vals;
+        for (int i_DOF = 0; i_DOF < N_rows_owned; i_DOF++) {
+            // Sort the component of recv_global_data by the column data
+            sort(recv_global_data[i_DOF].begin(), recv_global_data[i_DOF].end(),
+                [](const pair<HYPRE_BigInt, double> &a, const pair<HYPRE_BigInt, double> &b)
+                { return a.first < b.first; }
+            );
+            
+            // Go through the data of the i_DOF component of recv_global_data. Sum values of similar column indices
+            vector<int> cols; vector<double> vals;
+            for (int i_pair = 0; i_pair < recv_global_data[i_DOF].size(); i_pair++) {
+                if (i_pair == 0) {
+                    cols.push_back( recv_global_data[i_DOF][i_pair].first );
+                    vals.push_back( recv_global_data[i_DOF][i_pair].second );
+                    continue;
+                }
+                if (recv_global_data[i_DOF][i_pair].first == cols[cols.size() - 1]) {
+                    vals[vals.size() - 1] += recv_global_data[i_DOF][i_pair].second;
+                } else {
+                    cols.push_back( recv_global_data[i_DOF][i_pair].first );
+                    vals.push_back( recv_global_data[i_DOF][i_pair].second );
+                }
+            }
+            global_cols.push_back( cols );
+            global_vals.push_back( vals );
+        }
+
+
+
+        // The (global) column indices and corresponding values that each rank needs to build their owned row in the final averaging operator
+        // is now in global_cols and global_vals. Divide this col/val data by which pairs would reside in the rank's diagonal and off-diagonal
+        // matrices.
+
+        // Initialize variables to store the diagonal and off-diagonal matrix col/val data
+        vector<vector<double>> Dmat_vals, ODmat_vals;
+        vector<Array<HYPRE_BigInt>> Dmat_cols, ODmat_cols;
+        
+        // For each owned row...
+        for (int i_DOF = 0; i_DOF < N_rows_owned; i_DOF++)
+        {
+            // Initiate temporary variables to store the row data
+            vector<double> Dmat_vals_row, ODmat_vals_row;
+            Array<HYPRE_BigInt> Dmat_cols_row, ODmat_cols_row;
+            
+            // ...go through the col/val pairs.
+            for (int i_pair = 0; i_pair < global_vals[i_DOF].size(); i_pair++) {
+                // If the pair's global column index is within the range of vdofs owned by the rank, append it to the col/val data for the rank's diagonal matrix.
+                // Subtract varf_col_starts[0] from the global column index to make it local
+                if (global_cols[i_DOF][i_pair] >= varf_col_starts[0] && global_cols[i_DOF][i_pair] < varf_col_starts[1]) {
+                    Dmat_cols_row.Append(global_cols[i_DOF][i_pair] - varf_col_starts[0]);
+                    Dmat_vals_row.push_back(global_vals[i_DOF][i_pair]);
+                }
+                // If the pair's global column index is not within the range of vdofs owned by the rank, append it to the col/val data for the rank's off-diagonal matrix
+                else {
+                    ODmat_cols_row.Append(global_cols[i_DOF][i_pair]);
+                    ODmat_vals_row.push_back(global_vals[i_DOF][i_pair]);
+                }
+            }
+
+            // Store the col/val data for each row
+            Dmat_cols.push_back( Dmat_cols_row );
+            ODmat_cols.push_back( ODmat_cols_row );
+            Dmat_vals.push_back( Dmat_vals_row );
+            ODmat_vals.push_back( ODmat_vals_row );
+        }
+        
+
+        
+        // Column maps (global-to-local and local-to-global) need to be created for the off-diagonal matrix.
+        vector<HYPRE_BigInt> OD_colMap; // Given a local column index (e.g., 0, 1, ..., ODmat.Width()), it outputs a global column index (e.g., 0, ..., varf_avg_HPM->GetGlobalNumCols())
+        map<HYPRE_BigInt, int> OD_colMap_inv; // Given a global column index (e.g., 0, ..., varf_avg_HPM->GetGlobalNumCols()), it outputs a local column index (e.g., 0, 1, ..., ODmat.Width())
+        
+        // Compile the column indices for the off-diagonal matrix from all owned rows into OD_colMap
+        for (int i_DOF = 0; i_DOF < ODmat_cols.size(); i_DOF++) { OD_colMap.insert(OD_colMap.end(), ODmat_cols[i_DOF].begin(), ODmat_cols[i_DOF].end()); }
+        
+        // Remove the duplicate global columns from OD_colMap
+        {
+            sort(OD_colMap.begin(), OD_colMap.end(),
+                [](const HYPRE_BigInt &a, const HYPRE_BigInt &b)
+                { return a < b; }
+            );
+            auto last = unique(OD_colMap.begin(), OD_colMap.end());
+            OD_colMap.erase(last, OD_colMap.end());
+        }
+        
+        // Create the inverse column map
+        for (int i = 0; i < OD_colMap.size(); i++) { OD_colMap_inv[OD_colMap[i]] = i; }
+
+        
+
+        // Initiate the rank's diagonal and off-diagonal matrices
+        Dmat = SparseMatrix(N_rows_owned, N_cols_owned);
+        ODmat = SparseMatrix(N_rows_owned, OD_colMap.size());
+        
+        // Fill the rank's diagonal and off-diagonal matrices
+        for (int i_DOF = 0; i_DOF < N_rows_owned; i_DOF++) {
+            // Create an array of the local indices for the off-diagonal matrix
+            Array<int> OD_cols_temp;
+            for (int i = 0; i < ODmat_cols[i_DOF].Size(); i++) {
+                OD_cols_temp.Append( OD_colMap_inv[ODmat_cols[i_DOF][i]] );
+            }
+
+            // Set the rows in the diagonal and off-diagonal matrices. Use 
+            Vector Dmat_vals_Vec(Dmat_vals[i_DOF].data(), Dmat_vals[i_DOF].size());
+            Dmat.SetRow(i_DOF, Dmat_cols[i_DOF], Dmat_vals_Vec);
+            Vector ODmat_vals_Vec(ODmat_vals[i_DOF].data(), ODmat_vals[i_DOF].size());
+            ODmat.SetRow(i_DOF, OD_cols_temp, ODmat_vals_Vec);
+        }
+        
+        // Finalize the diagonal and off-diagonal matrices
+        Dmat.Finalize(); ODmat.Finalize();
+
+        
+        
+        // Create the HypreParMatrix for the averaging operator
+        vector<HYPRE_BigInt> row_starts_local = {row_starts[rank], row_starts[rank + 1]};
+        avg_mat = new HypreParMatrix(comm, (HYPRE_BigInt)N_rows, varf_avg_HPM->GetGlobalNumCols(), row_starts_local.data(), varf_avg_HPM->GetColStarts(), &Dmat, &ODmat, OD_colMap.data(), false);
+        
+        delete varf_avg_HPM; // This HypreParMatix came from ParallelAssemble, which calls for external owner (i.e., the caller deletes the matrix)
+    }
+
+    // Function for creating "averaging operators" from the diagonal and off-diagonal HypreParMatrices of the mixed bilinear form
+    void ParAveragingOperator::CreateLocalAvgOperator(SparseMatrix &mat, vector<vector<vector<int>>> &row_inds, SparseMatrix &mat_summed_rows, Array<double> &AR_areas_, const double tol)
+    {
+        // row_inds contains row indices of VDOFs that belong to each vector dimension (vdim) and AR. We sum the rows of mat
+        // over the indices provided in each inner-most vector of row_inds to gain one row in the mat_summed_rows, the averaging operator
+        int set_row = 0;
+        for (int i_vd = 0; i_vd < row_inds.size(); i_vd++) { // For each vector dimension...
+            
+            // This function will support general row_inds, but the second-level vectors of row_inds should often be N_AR in size (or at least equal in size).
+            // A warning will be issued if the second-level vectors are not the same size
+            if (i_vd > 0) {
+                if (row_inds[i_vd].size() != row_inds[i_vd - 1].size() ) {
+                    cout << "Rank " << rank << ": ParAveragingOperator::CreateLocalAvgOperator(): WARNING: the summed row indices provided do not show a consistent number of averaging regions between vector components (vdim). ";
+                    cout << "row_inds[" << i_vd << "] = " << row_inds[i_vd].size() << ", row_inds[" << i_vd - 1 << "] = " << row_inds[i_vd - 1].size() << "." << endl; } }
+            
+            for (int i_AR = 0; i_AR < row_inds[i_vd].size(); i_AR++) { // ...and each averaging region...
+                // ...sum over the corresponding rows in mat and insert it into mat_summed_rows
+                SumColsGivenRows(mat, row_inds[i_vd][i_AR], mat_summed_rows, set_row, tol);
+                
+                // Sum the row_sum, as it pertains to the area of the averaging region (only do this for the first vector component (vdim); it should be the same for the other vdim)
+                Array<int> col_inds; Vector row; mat_summed_rows.GetRow(set_row, col_inds, row);
+                if (i_vd == 0) { AR_areas_[i_AR] += row.Sum(); }
+                
+                // Iterate the row being set in mat_summed_rows
+                set_row += 1;
+            }
+        }
+    }
+    
+    // Function for summing indicated rows of a matrix mat and inserting the sum into a matrix mat_summed_rows
+    void ParAveragingOperator::SumColsGivenRows(SparseMatrix &mat, vector<int> &row_inds, SparseMatrix &mat_summed_rows, int set_ind, const double tol)
+    {
+        // Initiate a Vector for summing the rows in row_inds
+        Vector row_sum(mat.NumCols()); row_sum = 0.0;
+        
+        // Get the row_inds rows from mat and add them to row_sum
+        for (int i_DOF = 0; i_DOF < row_inds.size(); i_DOF++) {
+            Array<int> col_inds; Vector row; mat.GetRow(row_inds[i_DOF], col_inds, row); // Get the row from mat
+            for (int i_sum = 0; i_sum < col_inds.Size(); i_sum++) { row_sum[col_inds[i_sum]] += row[i_sum]; } // Add the row to row_sum
+        }
+
+        // If a component of row_sum is really small, just set it to 0; it is likely numerical error. Simultaneously create an Array of column indices (i.e., {0, ..., N_cols})
+        Array<int> all_col_indices(mat.NumCols());
+        for (int i = 0; i < row_sum.Size(); i++) { if (abs(row_sum[i]) < tol) { row_sum[i] = 0.0; } all_col_indices[i] = i; }
+        
+        // Insert the row_sum in mat_summed_rows, the matrix describing the averaging operator (or part of it in the case of MPI-parallel)
+        mat_summed_rows.SetRow(set_ind, all_col_indices, row_sum);
+    }
+
+    // Static method for computing the AR porosities
+    void ParAveragingOperator::ComputePorosities(const vector<double> &pore_areas, const vector<double> &AR_areas, vector<double> &porosities)
+    {
+        assert(pore_areas.size() == AR_areas.size());
+        porosities.clear();
+        for (int i = 0; i < pore_areas.size(); i++) {
+            porosities.push_back( pore_areas[i] / AR_areas[i] );
+        }
+    }
+
+    // Function for applying the averaging operator
+    void ParAveragingOperator::ApplyAvgOperator(const Vector &x, Vector &avg)
+    {
+        // Define a porosity vector of ones
+        vector<double> porosities;
+        for (int i_AR = 0; i_AR < N_AR; i_AR++) { porosities.push_back(1.0); }
+        
+        // Compute the average with a porosity of 1.0
+        ParAveragingOperator::ApplyAvgOperator(x, avg, porosities);
+    }
+    void ParAveragingOperator::ApplyAvgOperator(const Vector &x, Vector &avg, const vector<double> &porosities)
+    {
+        assert(porosities.size() == N_AR);
+
+        // Reset the avg output vector
+        avg.SetSize(N_rows_owned); avg = 0.0;
+
+        // Apply the averaging operator
+        avg_mat->Mult(x, avg);
+        
+        for (int i_row = 0; i_row < avg.Size(); i_row++) {
+            avg.Elem(i_row) *= porosities[local_row_to_AR_index[i_row]] / AR_areas[local_row_to_AR_index[i_row]];
+        }
+    }
+
+    // Function for piecing together the rank-local vectors that result from applying the averaging operator in parallel.
+    // The combine vector is kept on a single rank (by default, this rank is 0)
+    void ParAveragingOperator::GetSerialParAveragedVector(double* data, Vector &combined_data, int receiving_rank)
+    {
+        // Send AR_areas to receiving_rank, and sum them on receiving_rank. Then, broadcast the result so that all ranks have the same AR_area
+        if (rank == receiving_rank)
+        {
+            // Receive and store the data sent from the other ranks
+            vector<vector<double>> data_all;
+            for (int i_rank = 0; i_rank < N_ranks; i_rank++) {
+                if (i_rank == receiving_rank) { // Store the rank's own data
+                    vector<double> temp(data, data + N_rows_owned);
+                    data_all.push_back( temp );
+                }
+                else { // Receive the other ranks' data
+                    int N_recv_data;
+                    MPI_Recv(&N_recv_data, 1, MPI_INT, i_rank, 0, comm, MPI_STATUS_IGNORE);
+                    data_all.push_back( vector<double>(N_recv_data) );
+                    MPI_Recv(data_all[data_all.size() - 1].data(), N_recv_data, MPI_DOUBLE, i_rank, 1, comm, MPI_STATUS_IGNORE);
+                }
+            }
+            
+            // Combine the received data in the order in which rows are owned by rank
+            combined_data.SetSize(recv_ranks.size()); combined_data = 0.0;
+            vector<int> ind_count(N_ranks); for (int i = 0; i < N_ranks; i++) { ind_count[i] = 0; }
+            for (int i_row = 0; i_row < recv_ranks.size(); i_row++) {
+                combined_data[i_row] = data_all[ recv_ranks[i_row] ][ ind_count[recv_ranks[i_row]] ];
+                ind_count[recv_ranks[i_row]] += 1;
+            }
+        }
+        else
+        {
+            // Send the size of the data to be received by receiving_rank
+            MPI_Send(&N_rows_owned, 1, MPI_INT, receiving_rank, 0, comm);
+            // Send data to receiving_rank
+            MPI_Send(data, N_rows_owned, MPI_DOUBLE, receiving_rank, 1, comm);
+        }
+    }    
+#endif
+
+
+
+
+
 // ===============================================================
 //   Define the functions for the LinearTimeDependentOperator class.
 // ===============================================================
@@ -858,6 +1347,31 @@ void ResultsSaver::ObtainClosureResiduals(const BlockVector &sol_BLK, const vect
             for (int i_AR = 0; i_AR < N_AR; i_AR++)
             {
                 residuals[i_BI][i_vd].push_back( sol_BLK.GetBlock(block_IDs_for_saving_residuals[i_BI]).Elem(i_AR + i_vd * N_AR) );
+                if (solve_mode == "serial") { cout << residuals[i_BI][i_vd][i_AR] << endl; }
+            }
+        }
+    }
+
+    // Initialize the JSONDicts with fespace_vdim
+    InitializeJSONDicts_EqLevel(fespace_vdim);
+}
+void ResultsSaver::ObtainClosureResiduals(const Vector &sol_BLK, const vector<int> &fespace_vdim, int N_AR)
+{
+    // Make sure the required variables have been set
+    assert (N_residual_sets > 0);
+    assert (N_residual_sets == 1);
+    
+    // Go through the closure residual blocks in the solution and save the residuals
+    for (int i_BI = 0; i_BI < N_residual_sets; i_BI++) // i_BI < block_IDs_for_saving_residuals.size()
+    {
+        residuals.push_back( vector<vector<double>>() );
+        if (solve_mode == "serial") { cout << "Closure residuals (placed on RHS): Equation " << i_BI << endl; }
+        for (int i_vd = 0; i_vd < fespace_vdim[i_BI]; i_vd++)
+        {
+            residuals[i_BI].push_back( vector<double>() );
+            for (int i_AR = 0; i_AR < N_AR; i_AR++)
+            {
+                residuals[i_BI][i_vd].push_back( sol_BLK.Elem(i_AR + i_vd * N_AR) );
                 if (solve_mode == "serial") { cout << residuals[i_BI][i_vd][i_AR] << endl; }
             }
         }

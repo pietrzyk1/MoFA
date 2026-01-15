@@ -546,6 +546,189 @@ public:
 
 
 
+#ifdef MPI_BUILD
+    // ===============================================================
+    //   Declare the class for creating the averaging operator in
+    //   MPI-parallel from the finite element space of a variable.
+    // ===============================================================
+    class ParAveragingOperator
+    {
+    private:
+        MPI_Comm comm;
+        int rank, N_ranks;
+        vector<int> recv_ranks;
+        vector<int> local_row_to_AR_index; // local_row_to_AR_index: i_row (of owned average operator row) -> i_AR. Used for applying the averaging operator in parallel
+        //vector<int> local_row_to_vdim_index; // local_row_to_vdim_index: i_row (of owned average operator row) -> i_vdim (i.e., 0, 1, 2). Used for applying the averaging operator in parallel
+        int N_rows, N_rows_owned = 0;
+
+        string upscaling_theory;
+        int N_AR, vdim;
+        
+        int DOFs_per_vdim;
+        
+        ParFiniteElementSpace* fespace = nullptr;
+        unique_ptr<ParFiniteElementSpace> fespace_avg = nullptr;
+        unique_ptr<FiniteElementCollection> fec_avg = nullptr;
+        unique_ptr<ParMixedBilinearForm> varf_avg = nullptr;
+        
+        vector<vector<int>> AR_Elem_inds;
+        vector<vector<vector<int>>> AR_Dof_inds;
+
+        HypreParMatrix* avg_mat;
+        SparseMatrix Dmat, ODmat;
+        Array<double> AR_areas;
+        Array<HYPRE_BigInt> row_starts;
+
+        SparseMatrix weighted_avg_mat;
+        bool correctARAreas = false;
+
+
+    public:
+        // Class constructors
+        ParAveragingOperator(MPI_Comm comm_, Array<HYPRE_BigInt> &avg_mat_row_starts, ParFiniteElementSpace *fespace_, string upscaling_theory_ = "MoFA") : comm(comm_), row_starts(avg_mat_row_starts), fespace(fespace_), upscaling_theory(upscaling_theory_)
+        {
+            // Initialize variables from the inputs. This should not depend on MPI-related variables
+            vector<int> AR_tags = {-1}; Initialize(AR_tags);
+            
+            // Get the MPI rank, number of ranks in the comm world, and determine the rows of the final averaging operator that each rank will receive
+            MPI_Comm_rank(comm, &rank);
+            MPI_Comm_size(comm, &N_ranks);
+            InitializeReceivingRankInfo();
+            
+            // Carry out the initialization/avg. operator creation procedure
+            CreateDummyFESpace(fespace_->GetParMesh(), vdim);
+            CreateBilinearForm(fespace);
+            GetARIndices(fespace->GetParMesh());
+            CreateAvgOperator();
+            correctARAreas = true;
+        }
+        ParAveragingOperator(MPI_Comm comm_, ParFiniteElementSpace *fespace_, vector<int> AR_tags, string upscaling_theory_ = "MoFA") : comm(comm_), fespace(fespace_), upscaling_theory(upscaling_theory_)
+        {
+            // Initialize variables from the inputs. This should not depend on MPI-related variables
+            Initialize(AR_tags);
+
+            // Get the MPI rank, number of ranks in the comm world, and determine the rows of the final averaging operator that each rank will receive 
+            MPI_Comm_rank(comm, &rank);
+            MPI_Comm_size(comm, &N_ranks);
+            InitializeReceivingRankInfo();
+            
+            // Carry out the initialization/avg. operator creation procedure
+            CreateDummyFESpace(fespace->GetParMesh(), vdim);
+            CreateBilinearForm(fespace);
+            GetARIndices(fespace->GetParMesh(), AR_tags);
+            CreateAvgOperator();
+            correctARAreas = true;
+        }
+
+        void Initialize(vector<int> &AR_tags)
+        {
+            if (AR_tags.size() == 1 && AR_tags[0] == -1) // If no AR tags are given
+            {
+                // Get the number of averaging regions defined by the mesh
+                if (upscaling_theory == "MoFA") {
+                    cout << "ParAveragingOperator::Initialize(): WARNING: 'MoFA' was provided as the upscaling theory, but no AR_tags were provided. Continuing under the assumption that the AR_tags start at 1 and go to N_AR." << endl;
+                    N_AR = fespace->GetMesh()->attributes.Max(); } 
+                else if (upscaling_theory == "Homogenization") { N_AR = 1; }
+            }
+            else // If AR_tags are given
+            {
+                // Get the number of averaging regions defined by the provided AR_tags
+                if (upscaling_theory == "MoFA") { N_AR = AR_tags.size(); } 
+                else if (upscaling_theory == "Homogenization") { N_AR = 1; }
+            }
+
+            // Get vdim (i.e., the number of vector components) used to define the finite element space
+            vdim = fespace->GetVDim();
+            
+            // Create a variable for the number of rows in the final averaging operator (i.e., N_AR * vdim)
+            N_rows = N_AR * vdim;
+            
+            // Initialize AR_Elem_inds as an array of arrays
+            for (int i = 0; i < N_AR; i++) { AR_Elem_inds.push_back(vector<int>()); }
+            
+            // Initialize the size of the AR_areas vector
+            AR_areas.SetSize(N_AR);
+
+            // Initialize AR_Dof_inds
+            for (int i_vd = 0; i_vd < vdim; i_vd++) {
+                AR_Dof_inds.push_back(vector<vector<int>>());
+                for (int i_AR = 0; i_AR < N_AR; i_AR++) { AR_Dof_inds[i_vd].push_back(vector<int>()); }
+            }
+        }
+
+        // Function for identifying the rows of the final averaging operator that each rank will receive. The output will be
+        // a map row_ind -> rank ID
+        void InitializeReceivingRankInfo();
+
+
+        // Function for creating the dummy avg finite element space that will be used to generate the averaging operator
+        void CreateDummyFESpace(ParMesh *mesh_, const int vdim_);
+
+        // Function for creating the bilinear form used to generate the averaging operator
+        void CreateBilinearForm(ParFiniteElementSpace *fespace_);
+
+        // Function for getting 1.) the indices of elements inside each AR, and 2.) the indices of dofs (in the dummy space) of each element inside each AR
+        void GetARIndices(ParMesh *mesh_, vector<int> AR_tags = {-1});
+
+        // Function for creating the averaging operator from the avg space and mixed bilinear form
+        void CreateAvgOperator(const double tol = 1e-20);
+
+        // Function for creating (but not finalizing) the unweighted averaging operator from the avg space and mixed bilinear form,
+        // as well as computing the AR pore-space areas.
+        void PrepareUnweightedAvgOperator(const double tol = 1e-20);
+        // Function for creating "averaging operators" from the diagonal and off-diagonal HypreParMatrices of the mixed bilinear form
+        void CreateLocalAvgOperator(SparseMatrix &mat, vector<vector<vector<int>>> &row_inds, SparseMatrix &mat_summed_rows, Array<double> &AR_areas_, const double tol = 1e-20);
+        // Function for summing indicated rows of a matrix mat and inserting the sum into a matrix mat_summed_rows
+        void SumColsGivenRows(SparseMatrix &mat, vector<int> &row_inds, SparseMatrix &mat_summed_rows, int set_ind, const double tol = 1e-20);
+
+        /*
+        // Function that zeroes-out the columns of the avging operator corresponding to DOFs marked by "bdr_attr_is_ess".
+        // For the zeroed entries, the function multiplies the "pre-zeroed" entry value by the corresponding value in "sol" and subtracts the product from "rhs".
+        void EliminateTrialEssentialBC(const Array<int> &bdr_attr_is_ess, const Vector &sol, Vector &rhs);
+        */
+        
+        // Function for applying the averaging operator
+        void ApplyAvgOperator(const Vector &x, Vector &avg);
+        void ApplyAvgOperator(const Vector &x, Vector &avg, const vector<double> &porosities);
+        
+        // Static method for computing the AR porosities
+        static void ComputePorosities(const vector<double> &pore_areas, const vector<double> &AR_areas, vector<double> &porosities);
+
+        // Function for piecing together the rank-local vectors that result from applying the averaging operator in parallel.
+        // The combine vector is kept on a single rank (by default, this rank is 0)
+        void GetSerialParAveragedVector(double* data, Vector &combined_data, int receiving_rank = 0);
+        
+
+        // Function to get the number of averaging regions
+        int GetNAR() { return N_AR; }
+
+        // Function to get the vector dimension of the operator
+        int Getvdim() { return vdim; }
+        
+        // Function to get the averaging region areas
+        Array<double> GetAR_areas() { if (correctARAreas) {return AR_areas;} else { cout << "ParAveragingOperator: GetAR_areas(): AR areas should only be obtained from an unweighted ParAveragingOperator." << endl; exit(1); } }
+        vector<double> GetAR_areas_vector()
+        {
+            Array<double> AR_areas_Array(this->GetAR_areas());
+            vector<double> AR_areas_vector(AR_areas_Array.GetData(), AR_areas_Array.GetData() + AR_areas_Array.Size());
+            return AR_areas_vector;
+        }
+        
+        // Function to get the averaging operator matrix
+        HypreParMatrix* Getavg_mat() { return avg_mat; }
+
+        // Function to get a reference to AR_Dof_inds
+        //vector<vector<vector<int>>> &GetAR_Dof_inds() { return AR_Dof_inds; }
+
+        // Function for getting a diagonal matrix of the AR pore areas
+        //SparseMatrix GetAR_areas_SpMat();
+    };
+#endif
+
+
+
+
+
 // ===============================================================
 //   Declare the operator for handling the time stepping of
 //   linear systems.
@@ -748,7 +931,9 @@ public:
 
     // Function for obtaining the closure residuals from the solution block vector
     void ObtainClosureResiduals(const BlockVector &sol_BLK, const vector<int> &block_IDs_for_saving_residuals, const vector<int> &fespace_vdim, int N_AR);
+    void ObtainClosureResiduals(const Vector &sol_BLK, const vector<int> &fespace_vdim, int N_AR);
     void ObtainClosureResiduals(const BlockVector &sol_BLK, const vector<int> &block_IDs_for_saving_residuals, const vector<int> &fespace_vdim, int N_AR, const vector<int> AR_inds);
+    
 
     // Function for initializing the JSONDict vectors at the equation level.
     // This includes eq_dicts, res_dicts, CFN_dicts, and comp_dicts

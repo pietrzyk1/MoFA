@@ -296,7 +296,7 @@ int main(int argc, char *argv[])
         varf_viscous.EliminateEssentialBC(marker_inlet_BC, u_BC_apply, b_BLK.GetBlock(0)); // Sets the rows in "varf_viscous" corresponding to DOFs marked by "marker_inlet_BC" to 0.0 and assigns a diagonal as 1.0. Then, for the same rows, sets the components of b_BLK to those of u_BC_apply.
         varf_incomp.EliminateTrialEssentialBC(marker_inlet_BC, u_BC_apply, b_BLK.GetBlock(1)); // Sets the columns in "varf_viscous" corresponding to DOFs marked by "marker_inlet_BC" to 0.0. If zeroed components were non-zero, it multiplies those components by u_BC_apply and subtracts them from b_BLK.
     }
-
+    
     // Apply the no-slip condition to both bilinear forms
     //u_BC_apply.ProjectCoefficient(no_slip_BC);
     //u_BC_apply.ProjectBdrCoefficient(no_slip_BC, marker_no_slip_BC);

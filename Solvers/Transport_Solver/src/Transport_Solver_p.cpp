@@ -246,7 +246,7 @@ int main(int argc, char *argv[])
     }
     else
     {
-        cerr << globalVars.FILENAME << ": main(): CRITICAL ERROR: Could not load config file." << endl;
+        if (rank == 0) { cerr << globalVars.FILENAME << ": main(): CRITICAL ERROR: Could not load config file." << endl; }
         exit(1);
     }
 

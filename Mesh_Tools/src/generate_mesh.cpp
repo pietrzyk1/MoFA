@@ -162,7 +162,7 @@ int main(int argc, char **argv)
         sub_dict.getValue("min area threshold", min_area_threshold);
         sub_dict.getValue("max AR length", max_AR_length);
         sub_dict.getValue("max AR length ratio", max_AR_length_ratio);
-
+        
         JSONDict subsub_dict = *sub_dict["N_AR"];
         subsub_dict.getValue("x", N_AR_x);
         subsub_dict.getValue("y", N_AR_y);
@@ -177,7 +177,7 @@ int main(int argc, char **argv)
         subsub_dict.getValue("x", ell_x);
         subsub_dict.getValue("y", ell_y);
         if (is3D) { subsub_dict.getValue("z", ell_z); }
-
+        
         sub_dict = *mesh_dict["output path"];
         sub_dict.getValue("directory", output_dir);
         sub_dict.getValue("file name", output_file_name);
@@ -274,9 +274,12 @@ int main(int argc, char **argv)
                 std::vector<std::vector<double>> AR_planes;
                 assert (N_AR_x == 10 && N_AR_y == 10 && N_AR_z == 10);
                 if (simulation_type == "upscaled") {
-                    AR_planes = {{-5.0, -4.0, -3.0, -2.0, -1.0, 0.0, 1.0, 2.0, 3.0, 4.0, 5.0},
-                                 {-5.0, -4.0, -3.0, -2.0, -1.0, 0.0, 1.0, 2.0, 3.0, 4.0, 5.0},
-                                 {-5.0, -4.0, -3.0, -2.0, -1.0, 0.0, 1.0, 2.0, 3.0, 4.0, 5.0}};
+                    //AR_planes = {{-5.0, -4.0, -3.0, -2.0, -1.0, 0.0, 1.0, 2.0, 3.0, 4.0, 5.0},
+                    //             {-5.0, -4.0, -3.0, -2.0, -1.0, 0.0, 1.0, 2.0, 3.0, 4.0, 5.0},
+                    //             {-5.0, -4.0, -3.0, -2.0, -1.0, 0.0, 1.0, 2.0, 3.0, 4.0, 5.0}};
+                    AR_planes = {{-0.5, -0.4, -0.3, -0.2, -0.1, 0.0, 0.1, 0.2, 0.3, 0.4, 0.5},
+                                 {-0.5, -0.4, -0.3, -0.2, -0.1, 0.0, 0.1, 0.2, 0.3, 0.4, 0.5},
+                                 {-0.5, -0.4, -0.3, -0.2, -0.1, 0.0, 0.1, 0.2, 0.3, 0.4, 0.5}};
                 }
                 else if (simulation_type == "porescale") {
                     AR_planes = {{-0.5, -0.4, -0.3, -0.2, -0.1, 0.0, 0.1, 0.2, 0.3, 0.4, 0.5},
@@ -373,8 +376,12 @@ int main(int argc, char **argv)
     // top, bottom, left, and right tags are
     // inlet, outlet, no-slip, or periodic
     // ========================================
-    std::vector<int> AR_tags, no_slip_ln_tags, top_ln_tags, bottom_ln_tags, left_ln_tags, right_ln_tags, front_ln_tags, back_ln_tags, unused_ln_tags;
+    std::vector<int> AR_tags;
+    std::vector<int> no_slip_ln_tags, top_ln_tags, bottom_ln_tags, left_ln_tags, right_ln_tags, front_ln_tags, back_ln_tags, unused_ln_tags;
+    std::vector<int> inner_geo_ln_tags;
     int inlet_tag, outlet_tag, no_slip_tag, unused_tag;
+    int top_tag, bottom_tag, left_tag, right_tag, front_tag, back_tag;
+    int inner_tag;
     std::vector<int> inlet_AR_neighbors, outlet_AR_neighbors;
     bool anything_Merged = false;
     std::vector<double> AR_pore_space_areas;
@@ -403,6 +410,9 @@ int main(int argc, char **argv)
         no_slip_ln_tags.insert(no_slip_ln_tags.end(), bottom_ln_tags.begin(), bottom_ln_tags.end());
         no_slip_ln_tags.insert(no_slip_ln_tags.end(), front_ln_tags.begin(), front_ln_tags.end());
         no_slip_ln_tags.insert(no_slip_ln_tags.end(), back_ln_tags.begin(), back_ln_tags.end());
+
+        // For homogenization, we are interested in distinguishing the inner surfaces from the sides
+        inner_geo_ln_tags = domain_boundary_tags[6];
         cout << "    Complete!" << endl;
 
         
@@ -542,6 +552,14 @@ int main(int argc, char **argv)
         no_slip_tag = gmsh::model::addPhysicalGroup(2, no_slip_ln_tags);
         //unused_tag = gmsh::model::addPhysicalGroup(2, unused_ln_tags);
         
+        // For homogenization
+        top_tag = gmsh::model::addPhysicalGroup(2, top_ln_tags);
+        bottom_tag = gmsh::model::addPhysicalGroup(2, bottom_ln_tags);
+        left_tag = gmsh::model::addPhysicalGroup(2, left_ln_tags);
+        right_tag = gmsh::model::addPhysicalGroup(2, right_ln_tags);
+        front_tag = gmsh::model::addPhysicalGroup(2, front_ln_tags);
+        back_tag = gmsh::model::addPhysicalGroup(2, back_ln_tags);
+        inner_tag = gmsh::model::addPhysicalGroup(2, inner_geo_ln_tags);
     }
     else
     {
@@ -559,6 +577,8 @@ int main(int argc, char **argv)
         //unused_ln_tags = domain_boundary_tags[4];
         no_slip_ln_tags = domain_boundary_tags[4];
 
+        // For homogenization, we are interested in distinguishing the inner surfaces from the sides
+        inner_geo_ln_tags = domain_boundary_tags[4];
         
         // Remove duplicates from boundary_neighbor_AR_tags and initialize boundary_neighbor_PG
         for (int i = 0; i < boundary_neighbor_AR_tags.size(); i++) {
@@ -706,6 +726,13 @@ int main(int argc, char **argv)
         // Define the no-slip tags
         no_slip_tag = gmsh::model::addPhysicalGroup(1, no_slip_ln_tags);
         //unused_tag = gmsh::model::addPhysicalGroup(1, unused_ln_tags);
+
+        // For Homogenization
+        top_tag = gmsh::model::addPhysicalGroup(1, top_ln_tags);
+        bottom_tag = gmsh::model::addPhysicalGroup(1, bottom_ln_tags);
+        left_tag = gmsh::model::addPhysicalGroup(1, left_ln_tags);
+        right_tag = gmsh::model::addPhysicalGroup(1, right_ln_tags);
+        inner_tag = gmsh::model::addPhysicalGroup(1, inner_geo_ln_tags);
     }
     
 
@@ -731,8 +758,14 @@ int main(int argc, char **argv)
     }
     else {
         if (isPeriodic[0] == 1) {
-            for (int i = 0; i < left_ln_tags.size(); i++) { gmsh::model::geo::mesh::setTransfiniteCurve(left_ln_tags[i], (int)(ell_y/min_elem_size)); } // update: this should probably be the (length of each left_ln_tags) / min_elem_size
-            for (int i = 0; i < right_ln_tags.size(); i++) { gmsh::model::geo::mesh::setTransfiniteCurve(right_ln_tags[i], (int)(ell_y/min_elem_size)); } // update: this should probably be the (length of each left_ln_tags) / min_elem_size
+            for (int i = 0; i < left_ln_tags.size(); i++) {
+                gmsh::model::geo::mesh::setTransfiniteCurve(left_ln_tags[i], (int)(ell_y/min_elem_size)); } // update: this should probably be the (length of each left_ln_tags) / min_elem_size
+                //double tag_length; gmsh::model::occ::getMass(1, left_ln_tags[i], tag_length);
+                //gmsh::model::geo::mesh::setTransfiniteCurve(left_ln_tags[i], (int)(tag_length/min_elem_size)); } // update: this should probably be the (length of each left_ln_tags) / min_elem_size
+            for (int i = 0; i < right_ln_tags.size(); i++) {
+                gmsh::model::geo::mesh::setTransfiniteCurve(right_ln_tags[i], (int)(ell_y/min_elem_size)); } // update: this should probably be the (length of each left_ln_tags) / min_elem_size
+                //double tag_length; gmsh::model::occ::getMass(1, right_ln_tags[i], tag_length);
+                //gmsh::model::geo::mesh::setTransfiniteCurve(right_ln_tags[i], (int)(tag_length/min_elem_size)); } // update: this should probably be the (length of each left_ln_tags) / min_elem_size
         }
         if (isPeriodic[1] == 1) {
             for (int i = 0; i < bottom_ln_tags.size(); i++) { gmsh::model::geo::mesh::setTransfiniteCurve(bottom_ln_tags[i], (int)(L_x/min_elem_size)); }
@@ -749,8 +782,9 @@ int main(int argc, char **argv)
     // Create and save the map structure for providing the physical groups to the solvers
     // ========================================
     cout << "generate_mesh.cpp: Preparing mesh info file..." << endl;
-    JSONDict bdr_tag_file_new, AR_dict, stokes_dict, transport_dict, geometry, sim_info;
+    JSONDict bdr_tag_file_new, AR_dict, stokes_dict, transport_dict, homogenization_dict, geometry, sim_info;
     
+
     // Create the AR sub-dictionary
     AR_dict["total_number"] = (int)AR_tags.size();
     AR_dict["tags"] = AR_tags;
@@ -766,11 +800,13 @@ int main(int argc, char **argv)
     AR_dict["neighbors"] = AR_neighbors;
     bdr_tag_file_new["AR"] = &AR_dict;
     
+
     // Create the Stokes sub-dictionary (containing tags for BCs in the Stokes problem)
     stokes_dict["inlet1"] = inlet_tag;
     stokes_dict["inlet1 AR neighbors"] = inlet_AR_neighbors;
     stokes_dict["noslip1"] = no_slip_tag;
     bdr_tag_file_new["stokes"] = &stokes_dict;
+
 
     // Create the scalar closure sub-dictionary (containing tags for BCs in the scalar closure problem)
     transport_dict["inlet1"] = inlet_tag;
@@ -785,6 +821,20 @@ int main(int argc, char **argv)
         for (int i_pg = 0; i_pg < pg_cut_inds_pgs.size(); i_pg++) { transport_dict[pg_names[i_pg]] = pg_cut_inds_pgs[i_pg]; }
     }
     bdr_tag_file_new["scalar_closure"] = &transport_dict;
+    
+
+    // Create the homogenization sub-dictionary (containing tags for BCs in the classical closure problem)
+    homogenization_dict["top"] = top_tag;
+    homogenization_dict["bottom"] = bottom_tag;
+    homogenization_dict["left"] = left_tag;
+    homogenization_dict["right"] = right_tag;
+    homogenization_dict["inner"] = inner_tag;
+    if (is3D == 1) {
+        homogenization_dict["front"] = front_tag;
+        homogenization_dict["back"] = back_tag;
+    }
+    bdr_tag_file_new["homogenization"] = &homogenization_dict;
+
 
     // Create the mesh geometry dictionary
     geometry["L"] = {L_x, L_y, L_z};

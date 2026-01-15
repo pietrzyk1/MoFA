@@ -51,7 +51,7 @@ for ((i = 0; i < $N_BUILD_DIRS; i++))
 do
     cd ${BUILD_DIRS[i]}
     rm -Rf *
-    cmake ../ -DCMAKE_EXPORT_COMPILE_COMMANDS=1 #-DCMAKE_CXX_COMPILER=mpicxx # Uncomment for HPC
+    cmake ../ -DCMAKE_EXPORT_COMPILE_COMMANDS=1 -DCMAKE_CXX_COMPILER=mpicxx
     cd $TOP_DIR
 done
 

@@ -28,6 +28,10 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${PROJECT_SOURCE_DIR}/bin)
 include_directories(${UTILITY_SOURCE_DIR}/include)
 
 
+# Search for the OpenMP library. This will be used to create the ensemble closure solvers using multi-threading parallelism.
+find_package(OpenMP)
+
+
 ################
 # Serial build #
 ################
@@ -54,7 +58,6 @@ if(BUILD_FOR_SERIAL)
     # Build the Open-MP ensemble serial solver
     #------------------------
     # If the OpenMP library can be found, create an executable for solving the closure problems as an ensemble using multi-threading parallelism.
-    find_package(OpenMP)
     if(OpenMP_FOUND)
         # Define USE_OPENMP, which can be used to trigger OpenMP tasks in the executable
         add_definitions(-DUSE_OPENMP) # Tells C++ preprocessor to define the macro "USE_OPENMP"

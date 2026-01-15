@@ -341,3 +341,68 @@ istringstream createErrorDict(const string &project_dir, string sim_type)
     return errorDict.saveToStream();
 }
 
+
+
+
+
+// ========================================
+// For creating the Homogenization Transport Closure Solver JSON dictionary
+// ========================================
+istringstream createHomogenizationTransportClosureDict(const string &project_dir,
+    const int order, const vector<int> isPeriodic, const int active_advection,
+    const double Pe_s,
+    const int max_iter, const double rel_tol, const double abs_tol,
+    const int importFluidMesh = 0)
+{
+    JSONDict closureDict;
+
+    JSONDict closureDict_sim;
+    closureDict_sim["order"] = order; // The element order to use
+    closureDict_sim["active advection"] = active_advection; // Toggle for using a zero velocity field for advection. 0 = zero velocity, 1 = find and use previously solved Stokes solution
+    closureDict_sim["isPeriodic"] = isPeriodic; // Define whether to use periodic boundary conditions in the 3 directions. 0 = No, 1 = Yes
+    closureDict_sim["import fluid mesh"] = importFluidMesh; // Define whether the solver should import the mesh used for solving the Stokes problem (for fluid velocity) or use the mesh create from gmsh. 0 = use gmsh mesh, 1 = use MFEM mesh saved with the fluid velocity solution
+    closureDict["simulation parameters"] = &closureDict_sim;
+    
+    JSONDict closureDict_phys;
+    closureDict_phys["Pe_s"] = Pe_s; // The scaled Peclet number Pe_s = Pe*\epsilon*\omega
+    closureDict["physics parameters"] = &closureDict_phys;
+
+    JSONDict closureDict_solver;
+    closureDict_solver["max iterations"] = max_iter; // The maximum number of iterations for the solver
+    closureDict_solver["rel tol"] = rel_tol; // The relative tolerance for the solver
+    closureDict_solver["abs tol"] = abs_tol; // The absolute tolerance for the solver
+    closureDict["solver parameters"] = &closureDict_solver;
+
+    string closureDict_sol_dir = project_dir + "output/homogenization_transport_closure_solution/";
+    
+    JSONDict closureDict_residual;
+    closureDict_residual["directory"] = closureDict_sol_dir + "closure_residual/"; // The closure residual output directory
+    closureDict_residual["file name prefix"] = "a_sol"; // The prefix of the closure residual file name
+    closureDict_residual["file name suffix"] = ".txt"; // The suffix of the closure residual file name
+    closureDict["residual path"] = &closureDict_residual;
+
+    JSONDict closureDict_dispersion;
+    closureDict_dispersion["directory"] = closureDict_sol_dir + "closure_residual/"; // The output directory for the computed dispersion coefficient
+    closureDict_dispersion["file name prefix"] = "D"; // The prefix of the computed dispersion file name
+    closureDict_dispersion["file name suffix"] = ".txt"; // The suffix of the computed dispersion file name
+    closureDict["dispersion path"] = &closureDict_dispersion;
+
+    JSONDict closureDict_path;
+    closureDict_path["directory"] = closureDict_sol_dir + "closure_solution/"; // The closure solution output directory
+    closureDict_path["file name prefix"] = "chi"; // The prefix of the closure solution output file name
+    closureDict_path["file name suffix"] = ".gf"; // The suffix of the closure solution output file name
+    closureDict["closure path"] = &closureDict_path;
+
+    JSONDict closureDict_mesh;
+    closureDict_mesh["directory"] = closureDict_path["directory"]; // The closure solution mesh output directory
+    closureDict_mesh["file name prefix"] = "closure_mesh"; // The prefix of the closure solution mesh output file name
+    closureDict_mesh["file name suffix"] = ".mesh"; // The suffix of the closure solution mesh output file name
+    closureDict["mesh output path"] = &closureDict_mesh;
+
+    JSONDict closureDict_forcing;
+    closureDict_forcing["directory"] = closureDict_sol_dir + "closure_solution/"; // The applied forcing function directory
+    closureDict_forcing["file name"] = "None"; // The applied forcing function file name
+    closureDict["forcing function path"] = &closureDict_forcing;
+
+    return closureDict.saveToStream();
+}

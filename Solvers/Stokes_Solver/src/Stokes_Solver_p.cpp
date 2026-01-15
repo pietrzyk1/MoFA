@@ -309,7 +309,7 @@ int main(int argc, char *argv[])
 
     
     // ===============================================================
-    //   Create the linear form.
+    //   Create the linear form.       =========> NOTE <========= IF you find a problem in parallel, this is where is could be: use parallel assemble for the body force
     // ===============================================================
     if (rank == 0) { cout << globalVars.FILENAME << ":   Defining the RHS vector (body force function)... "; }
 
@@ -318,6 +318,7 @@ int main(int argc, char *argv[])
     VectorConstantCoefficient body_force(body_force_vec);
     varf_body_forc.AddDomainIntegrator(new VectorDomainLFIntegrator(body_force));
     varf_body_forc.Assemble();
+    //b_BLK_true.GetBlock(0) += *varf_force.ParallelAssemble(); // use this instead of  b_BLK.GetBlock(0) = varf_body_forc
     
     // Set the RHS blocks using the linear form
     b_BLK.GetBlock(0) = varf_body_forc;
