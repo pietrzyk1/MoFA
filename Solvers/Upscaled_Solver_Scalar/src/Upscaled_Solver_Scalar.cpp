@@ -37,15 +37,15 @@ constexpr bool genResFormAvailable = false;
 class GeneralizedResidualManager
 {
 public:
-    GeneralizedResidualManager();
+    constexpr GeneralizedResidualManager() {};
     GeneralizedResidualManager(double alpha_, double beta_, double gamma_);
     void SetParams(double alpha_, double beta_, double gamma_);
-    void ConstructParamVecs(int N_AR_global, const vector<int> &AR_inds_loc2glob);
-    void ImplementAlpha(BilinearForm *&varf);
-    void ImplementBeta(SparseMatrix &cavg);
-    void ImplementGamma(SparseMatrix &BM_avgavg, const vector<int> &AR_inds_loc2glob);
+    constexpr void ConstructParamVecs(int N_AR_global, const vector<int> &AR_inds_loc2glob) {};
+    constexpr void ImplementAlpha(BilinearForm *&varf) {};
+    constexpr void ImplementBeta(SparseMatrix &cavg) {};
+    constexpr void ImplementGamma(SparseMatrix &BM_avgavg, const vector<int> &AR_inds_loc2glob) {};
     void AlterGammaVec(const vector<int> &AR_tags, const vector<vector<int>> &AR_neighbors, int active_AR_global, int procedureID = -1);
-    vector<double>* GetParamVec(string param_name);
+    static constexpr vector<double>* GetParamVec(const char* param_name) { return nullptr; };
     bool LoadParamDicts(JSONDict &eq_dict);
     void ImplementGeneralizedResidual(vector<double> &temp, vector<string> keys, bool isKMat = false);
     void CreateTransform(JSONDict &closure_residuals_dict, vector<double> &porosities, int N_AR, double epsilon, double omega);
@@ -629,7 +629,20 @@ int main(int argc, char *argv[])
 // Define the time-dependent part of the inlet boundary condition c(x,t) = X(x)T(t)
 void inlet_BC_func_T(const double &t, double &F)
 {
-    double a1 = 0.5;
-    double b1 = a1 * M_PI * globalVars.epsilon * globalVars.epsilon * globalVars.BC_frequency_scale;// * 0.75;
-    F = a1 - a1 * cos(t * M_PI / b1);
+    string inlet_function_type = "sinusoidal";
+
+    if (inlet_function_type == "sinusoidal") {
+        // For a sinusoidal input
+        double a1 = 0.5;
+        double b1 = a1 * M_PI * globalVars.epsilon * globalVars.epsilon * globalVars.BC_frequency_scale;// * 0.75;
+        F = a1 - a1 * cos(t * M_PI / b1);
+    }
+    else if (inlet_function_type == "exponential") {
+        // For a exponential input
+        F = 1 - exp(-t / (globalVars.epsilon * globalVars.epsilon * globalVars.BC_frequency_scale));
+    }
+    else {
+        cerr << globalVars.FILENAME << ": CRITICAL ERROR: Unrecognized inlet function." << endl;
+        exit(1);
+    }
 }

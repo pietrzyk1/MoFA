@@ -110,11 +110,25 @@ void getCoordFromSTLLine(const string &line, std::vector<double> &coord, const d
 
 
 
+
 // ========================================
 // Function for importing STL cut geometry into gmsh
 // ========================================
 
 int createCutVolumeFromSTL(const string &STL_file_path, const double &geo_scale);
+// Here:
+//      STL_file_path: the file path to an STL file
+//      geo_scale: the scale with which to scale the loaded/imported geometry
+
+
+
+
+
+// ========================================
+// Function for importing STL geometry in gmsh (primarily for homogenization closure problem simulations)
+// ========================================
+
+std::vector<std::pair<int, int>> importSTLVolume(const string &STL_file_path, const double &geo_scale);
 // Here:
 //      STL_file_path: the file path to an STL file
 //      geo_scale: the scale with which to scale the loaded/imported geometry

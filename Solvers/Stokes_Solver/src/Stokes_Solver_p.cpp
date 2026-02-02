@@ -518,9 +518,11 @@ int main(int argc, char *argv[])
         mesh->Print(mesh_ofs);
         // Have rank 0 also save the entire serial/global mesh for 
         Mesh mesh_serial = mesh->GetSerialMesh(0);
-        ofstream mesh_out((output_dir + mesh_output_file_name).c_str()); //+ ".serial").c_str());
-        mesh_serial.Print(mesh_out);
-        
+        if (rank == 0) {
+            ofstream mesh_out((output_dir + mesh_output_file_name).c_str()); //+ ".serial").c_str());
+            mesh_serial.Print(mesh_out);
+        }
+
         // Save the velocity as a vector field
         ofstream u_ofs((output_dir + u_name.str()).c_str());
         u_ofs.precision(8);

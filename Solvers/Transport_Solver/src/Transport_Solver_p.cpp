@@ -101,6 +101,7 @@ public:
 };
 
 
+
 // Declare BC functions. They are defined after "main".
 void inlet_BC_func_T(const double &t, double &F);
 void inlet_BC_func_X(const Vector &p, double &F);
@@ -114,7 +115,6 @@ struct Params
     double BC_frequency_scale = 1.0;
 };
 static Params globalVars;
-
 
 
 
@@ -157,7 +157,8 @@ int main(int argc, char *argv[])
     int N_steps = 5000;
     double dt = 0.00001;
     int output_interval = 1000; // Number of time steps before saving the pore-scale and averaged pore-scale solutions
-    
+    int importFluidMesh = 0;
+
     double Pe = 10.0;
     double omega = 1.0;
 
@@ -226,6 +227,7 @@ int main(int argc, char *argv[])
         sub_dict.getValue("dt", dt);
         sub_dict.getValue("output interval", output_interval);
         sub_dict.getValue("BC frequency scale", globalVars.BC_frequency_scale);
+        sub_dict.getValue("import fluid mesh", importFluidMesh);
         
         sub_dict = *porescale_dict["physical parameters"];
         sub_dict.getValue("Pe", Pe);
@@ -274,8 +276,11 @@ int main(int argc, char *argv[])
     args.ParseCheck();
 
 
-    // Initialize variables from parser inputs
-    if (active_advection == 1) { mesh_file_path = fluid_velocity_mesh_file_path; }
+    // ===============================================================
+    //   Define variables based on the options provided in the parser
+    // ===============================================================
+    // When using the parallel solver, if advection is active/the fluid velocity was previous solved and used here, the mesh saved with the fluid velocity must be used. Also, use consistent BCs (i.e., both fluid and transport simulations should be non-periodic)
+    if (active_advection == 1 && importFluidMesh == 1) { mesh_file_path = fluid_velocity_mesh_file_path; }
     
     
     // ===============================================================
@@ -324,9 +329,11 @@ int main(int argc, char *argv[])
 
     // Have rank 0 also save the entire serial/global mesh for 
     Mesh mesh_serial = mesh->GetSerialMesh(0);
-    ofstream mesh_out((output_dir + mesh_output_file_name).c_str()); //+ ".serial").c_str());
-    mesh_serial.Print(mesh_out);
-
+    if (rank == 0) {
+        ofstream mesh_out((output_dir + mesh_output_file_name).c_str()); //+ ".serial").c_str());
+        mesh_serial.Print(mesh_out);
+    }
+    
 
     // ===============================================================
     //   Define the finite element space for the concentration.
@@ -603,9 +610,22 @@ int main(int argc, char *argv[])
 // Define the time-dependent part of the inlet boundary condition c(x,t) = X(x)T(t)
 void inlet_BC_func_T(const double &t, double &F)
 {
-    double a1 = 0.5;
-    double b1 = a1 * M_PI * globalVars.epsilon * globalVars.epsilon * globalVars.BC_frequency_scale; //* 0.75; // chosen to oscillate according to the maximum allowable amount (\epsilon^{-2})
-    F = a1 - a1 * cos(t * M_PI / b1);
+    string inlet_function_type = "sinusoidal";
+
+    if (inlet_function_type == "sinusoidal") {
+        // For a sinusoidal input
+        double a1 = 0.5;
+        double b1 = a1 * M_PI * globalVars.epsilon * globalVars.epsilon * globalVars.BC_frequency_scale; // chosen to oscillate according to the maximum allowable amount (\epsilon^{-2})
+        F = a1 - a1 * cos(t * M_PI / b1);
+    }
+    else if (inlet_function_type == "exponential") {
+        // For a exponential input
+        F = 1 - exp(-t / (globalVars.epsilon * globalVars.epsilon * globalVars.BC_frequency_scale));
+    }
+    else {
+        cerr << globalVars.FILENAME << ": CRITICAL ERROR: Unrecognized inlet function." << endl;
+        exit(1);
+    }
 }
 
 // Define the space-dependent part of the inlet boundary condition c(x,t) = X(x)T(t)

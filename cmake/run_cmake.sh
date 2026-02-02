@@ -32,7 +32,7 @@ SH_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
 #### Define the paths to the "build" directories ####
 #####################################################
 
-BUILD_DIRS=("Input_File_Generator/build/" "Mesh_Tools/build/" "Solvers/Stokes_Solver/build/" "Solvers/Transport_Closure_Solver/build/" "Solvers/Transport_Solver/build/" "Solvers/Upscaled_Solver_Scalar/build/" "Post_Processing/Error_Calc/build/")
+BUILD_DIRS=("Input_File_Generator/build/" "Mesh_Tools/build/" "Solvers/Stokes_Solver/build/" "Solvers/Transport_Closure_Solver/build/" "Solvers/Transport_Solver/build/" "Solvers/Upscaled_Solver_Scalar/build/" "Post_Processing/Error_Calc/build/" "Post_Processing/Porescale_Avger/build/")
 
 N_BUILD_DIRS=${#BUILD_DIRS[@]}
 

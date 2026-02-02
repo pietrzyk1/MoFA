@@ -32,9 +32,19 @@ SH_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
 #### Define the paths to the "build" directories ####
 #####################################################
 
-BUILD_DIRS=("Input_File_Generator/build/" "Mesh_Tools/build/" "Solvers/Stokes_Solver/build/" "Solvers/Transport_Closure_Solver/build/" "Solvers/Transport_Solver/build/" "Solvers/Upscaled_Solver_Scalar/build/" "Post_Processing/Error_Calc/build/")
+BUILD_DIRS=("Input_File_Generator/build/" "Mesh_Tools/build/" "Solvers/Stokes_Solver/build/" "Solvers/Transport_Closure_Solver/build/" "Solvers/Transport_Solver/build/" "Solvers/Upscaled_Solver_Scalar/build/" "Post_Processing/Error_Calc/build/" "Post_Processing/Porescale_Avger/build/")
 
 N_BUILD_DIRS=${#BUILD_DIRS[@]}
+
+
+
+##############################################################################
+#### Load the appropriate modules (these will change between HPC systems) ####
+##############################################################################
+
+module load cmake/3.22.4
+module load gcc/12.1.1
+module load openmpi/4.1.2
 
 
 
@@ -51,7 +61,7 @@ for ((i = 0; i < $N_BUILD_DIRS; i++))
 do
     cd ${BUILD_DIRS[i]}
     rm -Rf *
-    cmake ../ -DCMAKE_EXPORT_COMPILE_COMMANDS=1 -DCMAKE_CXX_COMPILER=mpicxx
+    cmake ../ -DCMAKE_CXX_COMPILER=mpicxx
     cd $TOP_DIR
 done
 

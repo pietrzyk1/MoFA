@@ -300,6 +300,7 @@ int main(int argc, char **argv)
                 //             {-0.5, -0.4, -0.3, -0.2, -0.1, 0.0, 0.1, 0.2, 0.3, 0.4, 0.5},
                 //             {-0.5, -0.4, -0.3, -0.2, -0.1, 0.0, 0.1, 0.2, 0.3, 0.4, 0.5}};
                 
+                //ARs = importSTLVolume(geometry_file_path, geo_scale);
                 ARs = importAndCutSTLVolume(geometry_file_path, geo_scale, AR_planes);
                 //gmsh::write("my_model.geo_unrolled"); // For debugging. Writes a (dense/heavy) file of the current gmsh model geometry
             }
@@ -404,7 +405,7 @@ int main(int argc, char **argv)
         // Separate the tags of the surfaces at the domain boundaries (i.e., at +-L_x, +-L_y, and +-L_z) from the rest of the surface tags.
         // The remaining surface tags (in domain_boundary_tags[6]) are the cut geometry boundaries
         cout << "generate_mesh.cpp: Separating the domain boundary tags from cut surface/volume tags..." << endl;
-        getDomainBoundarySurfaceTags(entity_tags_in_AR, domain_boundary_tags, L);
+        getDomainBoundarySurfaceTags(entity_tags_in_AR, domain_boundary_tags, ARs, boundary_neighbor_AR_tags, L);
         top_ln_tags = domain_boundary_tags[0];
         bottom_ln_tags = domain_boundary_tags[1];
         left_ln_tags = domain_boundary_tags[2];
@@ -422,28 +423,49 @@ int main(int argc, char **argv)
 
         // For homogenization, we are interested in distinguishing the inner surfaces from the sides
         inner_geo_ln_tags = domain_boundary_tags[6];
+
+        // Remove duplicates from boundary_neighbor_AR_tags and initialize boundary_neighbor_PG
+        for (int i = 0; i < boundary_neighbor_AR_tags.size(); i++) {
+            std::sort(boundary_neighbor_AR_tags[i].begin(), boundary_neighbor_AR_tags[i].end());
+            auto last = std::unique(boundary_neighbor_AR_tags[i].begin(), boundary_neighbor_AR_tags[i].end());
+            boundary_neighbor_AR_tags[i].erase(last, boundary_neighbor_AR_tags[i].end());
+            boundary_neighbor_PG.push_back( std::vector<int>() );
+        }
         cout << "    Complete!" << endl;
 
-        
+
+
+
+
         // ========================================
         // Merge the small AR pore spaces with others (If things are merged, do not use AR average; use pore-space average in simulations) 
         // ========================================
         cout << "generate_mesh.cpp: Merging small AR with neighboring AR..." << endl;
         std::vector<std::vector<int>> AR_tags_toBeMerged; // The inner list is {merge host tag (i.e., the big AR), merging tag (i.e., the small AR)}
         if (merge_ARs == 1) { anything_Merged = createMergedARGroups(ARs, min_area_threshold, max_AR_length, max_AR_length_ratio, AR_tags_toBeMerged, AR_pore_space_areas); }
-        
         if (anything_Merged) { cout << "    ARs were merged." << endl; } else { cout << "    No ARs were merged." << endl; }
         
-        if (anything_Merged) {
+        if (anything_Merged)
+        {
             cout << "    Total number of AR tags: " << AR_tags_toBeMerged.size() << "." << endl;
             // Create a physical groups from the AR merge groups
             cout << "    Creating AR physical groups:" << endl;
             for (int i = 0; i < AR_tags_toBeMerged.size(); i++) {
                 cout << "\r        Considering AR  i = " << i << "/" << AR_tags_toBeMerged.size() - 1 << "." << std::flush;
                 AR_tags.push_back( gmsh::model::addPhysicalGroup(2 + is3D, AR_tags_toBeMerged[i]) );
+
+                // Collect the physical group tag for the (merged) AR in boundary_neighbor_PG for the (merged) AR tags that touch the boundaries
+                for (int i_bn = 0; i_bn < boundary_neighbor_AR_tags.size(); i_bn++) {
+                    std::vector<int> combined_vec = boundary_neighbor_AR_tags[i_bn];
+                    combined_vec.insert(combined_vec.end(),  AR_tags_toBeMerged[i].begin(), AR_tags_toBeMerged[i].end());
+                    std::sort(combined_vec.begin(), combined_vec.end());
+                    auto last = std::unique(combined_vec.begin(), combined_vec.end());
+                    if (last != combined_vec.end()) { boundary_neighbor_PG[i_bn].push_back( AR_tags[AR_tags.size() - 1] ); }
+                }
             }
         }
-        else {
+        else
+        {
             cout << "    Total number of AR tags: " << ARs.size() << "." << endl;
             // Clear AR_tags_toBeMerged (if merge_ARs == 1, but nothing was merged, AR_tags_toBeMerged will already be loaded, so clear it)
             AR_tags_toBeMerged.clear();
@@ -460,12 +482,28 @@ int main(int argc, char **argv)
                 // Compute AR area
                 double AR_pore_space_area;
                 gmsh::model::occ::getMass(dim, tag, AR_pore_space_area);
+                AR_pore_space_area = std::abs(AR_pore_space_area);
                 AR_pore_space_areas.push_back( AR_pore_space_area );
+                
+                // Collect the physical group tag for the (merged) AR in boundary_neighbor_PG for the (merged) AR tags that touch the boundaries
+                for (int i_bn = 0; i_bn < boundary_neighbor_AR_tags.size(); i_bn++) {
+                    std::vector<int> combined_vec = boundary_neighbor_AR_tags[i_bn];
+                    combined_vec.push_back( tag );
+                    std::sort(combined_vec.begin(), combined_vec.end());
+                    auto last = std::unique(combined_vec.begin(), combined_vec.end());
+                    if (last != combined_vec.end()) { boundary_neighbor_PG[i_bn].push_back( AR_tags[AR_tags.size() - 1] ); }
+                    //for (int i_tag = 0; i_tag < boundary_neighbor_AR_tags[i_bn].size(); i_tag++) {
+                    //    if (boundary_neighbor_AR_tags[i_bn][i_tag] == tag) { boundary_neighbor_PG[i_bn].push_back( AR_tags[AR_tags.size() - 1] ); break; }
+                    //}
+                }
             }
         }
         cout << "    Complete!" << endl;
 
         
+
+
+
         // ========================================
         // Get the neighboring ARs for each AR (this includes diagonal neighbors; the code looks for any AR that share a point/line/surface with other AR)
         // ========================================
@@ -570,6 +608,10 @@ int main(int argc, char **argv)
             outlet_tag = gmsh::model::addPhysicalGroup(2, right_ln_tags);
             no_slip_tag = gmsh::model::addPhysicalGroup(2, no_slip_ln_tags);
             //unused_tag = gmsh::model::addPhysicalGroup(2, unused_ln_tags);
+
+            // Since the inlet and outlet are fixed to the left and right sides, we can use boundary_neighbor_PG directly. See 2D for details.
+            inlet_AR_neighbors = boundary_neighbor_PG[3];
+            outlet_AR_neighbors = boundary_neighbor_PG[1];
         }
     }
     else
@@ -587,6 +629,18 @@ int main(int argc, char **argv)
         left_ln_tags = domain_boundary_tags[3];
         //unused_ln_tags = domain_boundary_tags[4];
         no_slip_ln_tags = domain_boundary_tags[4];
+
+
+        /*
+        // This was just to calibrate a particular model. Comment out
+        for (int i = 0; i < left_ln_tags.size(); i++) {
+            if (left_ln_tags[i] != 19008 && left_ln_tags[i] != 19185 && left_ln_tags[i] != 16459) {
+                bottom_ln_tags.push_back(left_ln_tags[i]);
+            } 
+        }
+        left_ln_tags = {19008, 19185, 16459};
+        */
+
 
         // For homogenization, we are interested in distinguishing the inner surfaces from the sides
         inner_geo_ln_tags = domain_boundary_tags[4];
@@ -608,7 +662,7 @@ int main(int argc, char **argv)
         // Merge the small AR pore spaces with others (If things are merged, do not use AR average; use pore-space average in simulations) 
         // ========================================
         cout << "generate_mesh.cpp: Merging small AR with neighboring AR..." << endl;
-        std::vector<std::vector<int>> AR_tags_toBeMerged; // The inner list is {merge host tag (i.e., the big AR), merging tag (i.e., the smoll AR)}
+        std::vector<std::vector<int>> AR_tags_toBeMerged; // The inner list is {merge host tag (i.e., the big AR), merging tag (i.e., the small AR)}
         if (merge_ARs == 1) { anything_Merged = createMergedARGroups(ARs, min_area_threshold, max_AR_length, max_AR_length_ratio, AR_tags_toBeMerged, AR_pore_space_areas); }
         if (anything_Merged) { cout << "    ARs were merged." << endl; } else { cout << "    No ARs were merged." << endl; }
         
@@ -651,6 +705,7 @@ int main(int argc, char **argv)
                 // Compute AR area
                 double AR_pore_space_area;
                 gmsh::model::occ::getMass(dim, tag, AR_pore_space_area);
+                AR_pore_space_area = std::abs(AR_pore_space_area);
                 AR_pore_space_areas.push_back( AR_pore_space_area );
                 
                 // Collect the physical group tag for the (merged) AR in boundary_neighbor_PG for the (merged) AR tags that touch the boundaries

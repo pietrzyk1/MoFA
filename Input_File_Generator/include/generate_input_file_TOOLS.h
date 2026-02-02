@@ -271,7 +271,8 @@ istringstream createTransportUpscaledDict(const string &project_dir,
 istringstream createTransportPorescaleDict(const string &project_dir,
     const int order, const vector<int> isPeriodic, const int active_advection, const int useInlet, const int useReactions,
     const double Pe, const double omega, const vector<double> Da_s, const double inletFreq,
-    const int N_time_steps, const double dt, const int output_interval)
+    const int N_time_steps, const double dt, const int output_interval,
+    const int importFluidMesh = 0)
 {
     JSONDict porescaleDict;
     
@@ -305,6 +306,7 @@ istringstream createTransportPorescaleDict(const string &project_dir,
     porescaleDict_sim["dt"] = dt; // The time step size
     porescaleDict_sim["output interval"] = output_interval; // The number of time steps before another solution is saved to the output
     porescaleDict_sim["BC frequency scale"] = inletFreq; // This value multiplies the boundary condition frequency for faster/slower oscillation. Maximum magnitude of dc/dt at the BC is this number times \epsilon^(-2). (\epsilon^(-2) is typically the maximum BC oscillation frequency allowed for by the model)
+    porescaleDict_sim["import fluid mesh"] = importFluidMesh; // Define whether the solver should import the mesh used for solving the Stokes problem (for fluid velocity) or use the mesh create from gmsh. 0 = use gmsh mesh, 1 = use MFEM mesh saved with the fluid velocity solution
     porescaleDict["simulation parameters"] = &porescaleDict_sim;
     
     return porescaleDict.saveToStream();

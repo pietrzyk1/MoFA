@@ -42,15 +42,15 @@ constexpr bool genResFormAvailable = false;
 class GeneralizedResidualManager
 {
 public:
-    GeneralizedResidualManager();
+    constexpr GeneralizedResidualManager() {};
     GeneralizedResidualManager(double alpha_, double beta_, double gamma_);
     void SetParams(double alpha_, double beta_, double gamma_);
-    void ConstructParamVecs(int N_AR_global, const vector<int> &AR_inds_loc2glob);
-    void ImplementAlpha(BilinearForm *&varf);
-    void ImplementBeta(SparseMatrix &cavg);
-    void ImplementGamma(SparseMatrix &BM_avgavg, const vector<int> &AR_inds_loc2glob);
+    constexpr void ConstructParamVecs(int N_AR_global, const vector<int> &AR_inds_loc2glob) {};
+    constexpr void ImplementAlpha(BilinearForm *&varf) {};
+    constexpr void ImplementBeta(SparseMatrix &cavg) {};
+    constexpr void ImplementGamma(SparseMatrix &BM_avgavg, const vector<int> &AR_inds_loc2glob) {};
     void AlterGammaVec(const vector<int> &AR_tags, const vector<vector<int>> &AR_neighbors, int active_AR_global, int procedureID = -1);
-    vector<double>* GetParamVec(string param_name);
+    static constexpr vector<double>* GetParamVec(const char* param_name) { return nullptr; };
     bool LoadParamDicts(JSONDict &eq_dict);
     void ImplementGeneralizedResidual(vector<double> &temp, vector<string> keys, bool isKMat = false);
     void CreateTransform(JSONDict &closure_residuals_dict, vector<double> &porosities, int N_AR, double epsilon, double omega);
@@ -405,6 +405,8 @@ int main(int argc, char *argv[])
         }
         // Reassign variable "mesh" to the local mesh
         mesh_manager.UseLocalMesh();
+        // If the solve mode is not serial, and the save mesh is not 1, delete the parent mesh; it is no longer needed
+        if (solve_mode != "serial" && save_mesh != 1) { mesh_manager.DeleteParentMesh(); }
         // Update variables based on the local mesh used
         N_AR = mesh_manager.get_N_AR_local();
         AR_tags = mesh_manager.get_AR_kept();
@@ -696,7 +698,8 @@ int main(int argc, char *argv[])
     //
     // Use the AveragingOperator class to obtain a matrix that can be multiplied by the solution vector to obtain the average solution in each AR
     AveragingOperator *avgOp = new AveragingOperator(fespace_c, AR_tags);
-    SparseMatrix BM_cavg(avgOp->Getavg_mat());
+    //SparseMatrix BM_cavg(avgOp->Getavg_mat());
+    SparseMatrix *BM_cavg(avgOp->Getavg_mat());
     Array<double> AR_areas(avgOp->GetAR_areas());
     
     cout << "Complete." << endl;
@@ -716,7 +719,7 @@ int main(int argc, char *argv[])
 
 
     // Apply beta to the avg operator and its adjoint
-    if (useGenResForm) { gen_res_manager.ImplementBeta(BM_cavg); }
+    if (useGenResForm) { gen_res_manager.ImplementBeta(*BM_cavg); }
     
     // Obtain the block matrix for adding "a" into the averaging operator, and multiply it by beta and gamma
     SparseMatrix BM_avgavg = avgOp->GetAR_areas_SpMat(); BM_avgavg.Finalize();
@@ -730,12 +733,12 @@ int main(int argc, char *argv[])
 
     // Create the transpose of the averaging operator matrix (this will be the bilinear form/operator of the unknown forcing terms in the mass conservation equation)
     TransposeOperator *BM_cavg_T = nullptr;
-    BM_cavg_T = new TransposeOperator(&BM_cavg);
+    BM_cavg_T = new TransposeOperator(BM_cavg);
     
     // Set the blocks of the closure system block operator
     closureOp_BLK.SetBlock(0, 0, &BM_cdiff);
     closureOp_BLK.SetBlock(0, 1, BM_cavg_T);
-    closureOp_BLK.SetBlock(1, 0, &BM_cavg);
+    closureOp_BLK.SetBlock(1, 0, BM_cavg);
     
     // Set the averaging operator to be 1 in the specified averaging region
     if (active_AR != -1 && forcing_function_file_name == "None") {
@@ -758,8 +761,8 @@ int main(int argc, char *argv[])
     //                          [     0     S ]   [    0      BM_cavg diag(BM_cdiff)^(-1) BM_cavg_T ]
     //
     SaddlePointBlockPreconditioner closurePC(block_offsets);
-    if (is3D) { closurePC.BuildPreconditioner(BM_cdiff, BM_cavg, "DSmoother", "GSSmoother"); }
-    else { closurePC.BuildPreconditioner(BM_cdiff, BM_cavg, "BlockILU", "BlockILU"); }
+    if (is3D) { closurePC.BuildPreconditioner(BM_cdiff, *BM_cavg, "DSmoother", "GSSmoother"); }
+    else { closurePC.BuildPreconditioner(BM_cdiff, *BM_cavg, "BlockILU", "BlockILU"); }
     
     cout << "Complete." << endl;
     

@@ -1278,16 +1278,305 @@ int createCutVolumeFromSTL(const string &STL_file_path, const double &geo_scale)
 
 
 // ========================================
+// Function for importing STL geometry in gmsh (primarily for homogenization closure problem simulations)
+// ========================================
+
+std::vector<std::pair<int, int>> importSTLVolume(const string &STL_file_path, const double &geo_scale)
+{
+    // Define the function name
+    const string FUNCTION_NAME = "importSTLVolume()";
+    double tol = 1e-10;
+
+
+    // Get the point coordinates from the STL file. Assign preliminary line and surface/triangle information
+    cout << FILE_NAME << ": " << FUNCTION_NAME << ": Getting STL points from file..." << endl;
+    int tri_count;
+    std::vector<std::tuple<std::vector<double>, std::vector<int>, std::vector<int>>> coord_ln_surf_pairs;
+    {
+        std::vector<std::vector<double>> surf_normals;
+        getTriPointsFromSTL(STL_file_path, geo_scale, coord_ln_surf_pairs, surf_normals, tri_count);
+    }
+    cout << FILE_NAME << ": " << FUNCTION_NAME << ": Complete!" << endl;
+    
+
+    // Create gmsh points from the STL points
+    cout << FILE_NAME << ": " << FUNCTION_NAME << ": Creating gmsh points from STL points..." << endl;
+    // Sort coord_ln_pairs based on the point coordinates (so that duplicates are next to each other)
+    std::sort(coord_ln_surf_pairs.begin(), coord_ln_surf_pairs.end(),
+        [](const std::tuple<std::vector<double>, std::vector<int>, std::vector<int>> &a,
+           const std::tuple<std::vector<double>, std::vector<int>, std::vector<int>> &b)
+        {
+            if (std::get<0>(a)[0] == std::get<0>(b)[0]) {
+                if (std::get<0>(a)[1] == std::get<0>(b)[1]) {
+                    return std::get<0>(a)[2] < std::get<0>(b)[2];
+                }
+                else { return std::get<0>(a)[1] < std::get<0>(b)[1]; }
+            }
+            else { return std::get<0>(a)[0] < std::get<0>(b)[0]; }
+        });
+    
+    // Initialize ln_pt_surf_pairs
+    std::vector<std::tuple<std::vector<int>, std::vector<int>>> ln_pt_surf_pairs; // given a line number, this contains (1) the corresponding pt tags, and (2) the fictitious surface tags
+    for (int i = 0; i < coord_ln_surf_pairs.size(); i++) { ln_pt_surf_pairs.push_back( std::tuple<std::vector<int>, std::vector<int>>() ); }
+
+    // Initialize surf_ln_pt_pairs
+    std::vector<std::tuple<std::vector<int>, std::vector<int>>> surf_ln_pt_pairs; // given a fictitious surface tag, this contains (1) the corresponding pt tags, and (2) the fictitious surface tags
+    for (int i = 0; i < tri_count; i++) { surf_ln_pt_pairs.push_back( std::tuple<std::vector<int>, std::vector<int>>() ); }
+
+    // Create gmsh points from coord_ln_pairs and collect the tags (associated with each line) in ln_pt_surf_pairs. Also store the surfaces of the corresponding lines in ln_pt_surf_pairs
+    int pt_gID, pt_gID_first;
+    for (int i_coord = 0; i_coord < coord_ln_surf_pairs.size(); i_coord++) {
+        cout << "\r    Considering point  i_coord = " << i_coord << "/" << coord_ln_surf_pairs.size() - 1 << "." << std::flush;
+        std::vector<double> &coords_current = std::get<0>(coord_ln_surf_pairs[i_coord]);
+        if (i_coord == 0) {
+            pt_gID = gmsh::model::occ::addPoint(coords_current[0], coords_current[1], coords_current[2], 1.0); // Create the point
+            pt_gID_first = pt_gID;
+        }
+        else {
+            std::vector<double> &coords_prev = std::get<0>(coord_ln_surf_pairs[i_coord - 1]);
+            if (coords_current[0] == coords_prev[0] && coords_current[1] == coords_prev[1] && coords_current[2] == coords_prev[2]) { } // pass; do not create a new point if the coordinates match the previous point
+            else { pt_gID = gmsh::model::occ::addPoint(coords_current[0], coords_current[1], coords_current[2], 1.0); } // Create the point 
+        }
+        
+        std::vector<int> &ln_inds = std::get<1>(coord_ln_surf_pairs[i_coord]), &surf_inds = std::get<2>(coord_ln_surf_pairs[i_coord]);
+        
+        for (int i_ln = 0; i_ln < ln_inds.size(); i_ln++) {
+            // Add the point to corresponding lines
+            std::get<0>( ln_pt_surf_pairs[ln_inds[i_ln]] ).push_back( pt_gID );
+            // Add the point's surfaces to corresponding lines
+            std::vector<int> &surf_list = std::get<1>( ln_pt_surf_pairs[ln_inds[i_ln]] );
+            surf_list.insert( surf_list.end(), surf_inds.begin(), surf_inds.end() );
+            //  ==================================================
+            // Consider adding the coordinates to ln_pt_surf_pairs so that they do not have to be continuously retrieved in the next step while handling the lines.
+            //  ==================================================
+        }
+
+        for (int i_surf = 0; i_surf < surf_inds.size(); i_surf++) {
+            // Add the point to corresponding surfaces
+            std::get<1>( surf_ln_pt_pairs[surf_inds[i_surf]] ).push_back( pt_gID );
+        }
+    }
+
+    // Because of 1.) the way in which points in coord_ln_surf_pairs are initially assigned line and surface numbers (in getTriPointsFromSTL()), and
+    //            2.) the method of filling ln_pt_surf_pairs with surface information,
+    // The resulting lines in ln_pt_surf_pairs will be associated with 2 surface IDs that are identical. We remove this duplication here
+    for (int i_ln = 0; i_ln < ln_pt_surf_pairs.size(); i_ln++) {
+        std::vector<int> &surf_list = std::get<1>(ln_pt_surf_pairs[i_ln]);
+        removeDuplicates(surf_list, [](const int &a, const int &b){ return a < b; });
+        assert (surf_list.size() == 1);
+    }
+    cout << endl << "    Created " << pt_gID - pt_gID_first << " unique gmsh points." << endl;
+    cout << "    Complete!" << endl;
+    
+
+
+    // Synchronize so that the points can be used in gmsh::model::getValue() later
+    cout << FILE_NAME << ": " << FUNCTION_NAME << ": Synchronizing..." << endl;
+    gmsh::model::occ::synchronize();
+    cout << "    Complete!" << endl;
+
+
+
+
+    
+    // Remove duplicate point tags from surf_ln_pt_pairs
+    for (int i_surf = 0; i_surf < surf_ln_pt_pairs.size(); i_surf++) {
+        std::vector<int> &pt_list = std::get<1>(surf_ln_pt_pairs[i_surf]);
+        removeDuplicates(pt_list, [](const int &a, const int &b){ return a < b; });
+    }
+    
+    cout << FILE_NAME << ": " << FUNCTION_NAME << ": Removing duplicate lines..." << endl;
+    // Sort each component of ln_pt_surf_pairs. Put the smaller point tag first
+    for (int i_ln = 0; i_ln < ln_pt_surf_pairs.size(); i_ln++) {
+        std::vector<int> &pt_tags_dummy = std::get<0>(ln_pt_surf_pairs[i_ln]);
+        assert (pt_tags_dummy.size() == 2); // Make sure there are only 2 points per line
+        if (pt_tags_dummy[0] > pt_tags_dummy[1]) { pt_tags_dummy = {pt_tags_dummy[1], pt_tags_dummy[0]}; }
+    }
+    
+    // Sort ln_pt_surf_pairs based on the first line tag, and then the second line tag if the first ones are the same
+    std::sort(ln_pt_surf_pairs.begin(), ln_pt_surf_pairs.end(),
+        [](const std::tuple<std::vector<int>, std::vector<int>> &a, const std::tuple<std::vector<int>, std::vector<int>> &b) {
+            if (std::get<0>(a)[0] == std::get<0>(b)[0]) { return std::get<0>(a)[1] < std::get<0>(b)[1]; }
+            else { return std::get<0>(a)[0] < std::get<0>(b)[0]; }
+        });
+    
+    // Remove duplicate lines, but compile their fictitious surface tags with the kept line (of the duplicate pair). Also provide surf_ln_pt_pairs with the lines for each surface
+    std::vector<std::tuple<std::vector<int>, std::vector<int>>> ln_pt_surf_pairs2; // given a line number, this contains (1) the corresponding pt tags, and (2) the fictitious surface tags
+    for (int i_ln = 0; i_ln < ln_pt_surf_pairs.size(); i_ln++) {
+        // If it is the first line...
+        if (i_ln == 0) {
+            // ... add it to the new lines
+            ln_pt_surf_pairs2.push_back( ln_pt_surf_pairs[i_ln] );
+            // and add it to the corresponding surfaces
+            std::vector<int> &surf_entry = std::get<1>(ln_pt_surf_pairs[i_ln]);
+            for (int i_surf = 0; i_surf < surf_entry.size(); i_surf++) { std::get<0>( surf_ln_pt_pairs[ surf_entry[i_surf] ] ).push_back( ln_pt_surf_pairs2.size() - 1 ); }
+            continue; }
+        // If the line is a copy of the previous line, just add the fictitious surface tags to the last entry in ln_pt_surf_pairs2
+        std::vector<int> &pt_tags = std::get<0>(ln_pt_surf_pairs[i_ln]); std::vector<int> &prev_pt_tags = std::get<0>(ln_pt_surf_pairs[i_ln - 1]);
+        if (pt_tags[0] == prev_pt_tags[0] && pt_tags[1] == prev_pt_tags[1]) {
+            // Add the fictitious surface tags to the last entry
+            std::vector<int> &last_surf_entry = std::get<1>(ln_pt_surf_pairs2[ln_pt_surf_pairs2.size() - 1]);
+            last_surf_entry.insert(last_surf_entry.end(), std::get<1>(ln_pt_surf_pairs[i_ln]).begin(), std::get<1>(ln_pt_surf_pairs[i_ln]).end());
+            // Add the previous line index to surf_ln_pt_pairs
+            std::vector<int> &surf_entry = std::get<1>(ln_pt_surf_pairs[i_ln]);
+            for (int i_surf = 0; i_surf < surf_entry.size(); i_surf++) { std::get<0>( surf_ln_pt_pairs[ surf_entry[i_surf] ] ).push_back( ln_pt_surf_pairs2.size() - 1 ); }
+            continue;
+        }
+        // If the line is not the first entry and not a copy, add it to the new lines and the corresponding surfaces
+        ln_pt_surf_pairs2.push_back( ln_pt_surf_pairs[i_ln] );
+        std::vector<int> &surf_entry = std::get<1>(ln_pt_surf_pairs[i_ln]);
+        for (int i_surf = 0; i_surf < surf_entry.size(); i_surf++) { std::get<0>( surf_ln_pt_pairs[ surf_entry[i_surf] ] ).push_back( ln_pt_surf_pairs2.size() - 1 ); }
+    }
+    ln_pt_surf_pairs.clear();
+    cout << "    Complete!" << endl;
+
+
+
+
+
+
+
+
+    
+    // Initialize surf_gln_pairs
+    std::vector<std::vector<std::pair<int, int>>> surf_gln_pairs;
+    for (int i = 0; i < surf_ln_pt_pairs.size(); i++) { surf_gln_pairs.push_back( std::vector<std::pair<int, int>>() ); }
+
+    DisplacedVector<std::vector<int>> gln_surf_pairs, gln_gsurf_pairs;
+
+    // Create gmsh lines from ln_pt_surf_pairs2 and collect the tags (associated with each surface) in surf_gln_pairs
+    cout << FILE_NAME << ": " << FUNCTION_NAME << ": Creating gmsh lines..." << endl;
+    int ln_gID;
+    for (int i_ln = 0; i_ln < ln_pt_surf_pairs2.size(); i_ln++) {
+        cout << "\r    Considering line  i_ln = " << i_ln << "/" << ln_pt_surf_pairs2.size() - 1 << "." << std::flush;
+
+        // Create the line
+        ln_gID = gmsh::model::occ::addLine(std::get<0>(ln_pt_surf_pairs2[i_ln])[0], std::get<0>(ln_pt_surf_pairs2[i_ln])[1]);            
+        // Initiate gln_surf_pairs if i_ln = 0
+        if (i_ln == 0) { gln_surf_pairs.SetMinInd(ln_gID); gln_gsurf_pairs.SetMinInd(ln_gID); }
+        // Add the surface indices entry to gln_surf_pairs for the corresponding gline
+        gln_surf_pairs.push_back( std::vector<int>() ); gln_gsurf_pairs.push_back( std::vector<int>() );
+        gln_surf_pairs[ln_gID] = std::get<1>(ln_pt_surf_pairs2[i_ln]);
+        // Add the gline to the corresponding surfaces in surf_gln_pairs
+        for (int i_surf = 0; i_surf < std::get<1>(ln_pt_surf_pairs2[i_ln]).size(); i_surf++) {
+            surf_gln_pairs[ std::get<1>(ln_pt_surf_pairs2[i_ln])[i_surf] ].push_back( {1, ln_gID} );
+        }
+    }
+    cout << endl << "    Created " << gln_surf_pairs.get_max_ind() - gln_surf_pairs.get_min_ind() << " unique gmsh lines." << endl;
+    cout << "    Complete!" << endl;
+    
+
+    
+
+
+    // Synchronize the lines that were created
+    cout << FILE_NAME << ": " << FUNCTION_NAME << ": Synchronizing..." << endl;
+    gmsh::model::occ::synchronize();
+    cout << "    Complete!" << endl;
+
+
+
+
+    
+    cout << FILE_NAME << ": " << FUNCTION_NAME << ": Creating surfaces..." << endl;
+
+    std::vector<int> gsurf_IDs;
+
+    for (int i_surf = 0; i_surf < surf_gln_pairs.size(); i_surf++) {
+        cout << "\r    Considering surface  i_surf = " << i_surf << "/" << surf_gln_pairs.size() - 1 << "." << std::flush;
+
+        // Remove duplicate lines and make sure there are at least 3 lines left to create a surface with
+        removeDuplicates(surf_gln_pairs[i_surf], [](const std::pair<int, int> &a, const std::pair<int, int> &b) { return a.second < b.second; });
+        assert (surf_gln_pairs[i_surf].size() >= 3);
+        
+        // Record the first line tag in curveLoop. Then, figure out the orientation of the other lines
+        std::vector<int> curveLoop;
+        curveLoop.push_back( surf_gln_pairs[i_surf][0].second );
+        
+        // Get the boundaries of the lines to figure out their orientations
+        std::vector<std::vector<std::pair<int, int>>> bndry_pts; for (int i = 0; i < surf_gln_pairs[i_surf].size(); i++) { bndry_pts.push_back( std::vector<std::pair<int, int>>() ); }
+        for (int i_ln = 0; i_ln < surf_gln_pairs[i_surf].size(); i_ln++) {
+            gmsh::model::getBoundary({surf_gln_pairs[i_surf][i_ln]}, bndry_pts[i_ln], false, false, false);
+        }
+        
+
+        // Figure out the orientation of the other surface lines
+        int target_pt = bndry_pts[0][1].second; // Get the pt tag of the [1] point of the [0] line
+        std::vector<int> used_inds = {0};
+        std::vector<int> all_pt_tags = {bndry_pts[0][1].second}; // For assigning the surface an AR volume index
+        for (int i_ln = 1; i_ln < bndry_pts.size(); i_ln++) {
+            for (int i_ln2 = 1; i_ln2 < bndry_pts.size(); i_ln2++) {
+                
+                // If the line was already added to curveLoop, skip it. Each line can only be used once
+                bool wasUsed = false;
+                for (int i_u = 0; i_u < used_inds.size(); i_u++) { if (i_ln2 == used_inds[i_u]){ wasUsed = true; break; } }
+                if (wasUsed) { continue; }
+                
+                if (bndry_pts[i_ln2][0].second == target_pt) {
+                    curveLoop.push_back( surf_gln_pairs[i_surf][i_ln2].second );
+                    target_pt = bndry_pts[i_ln2][1].second;
+                    all_pt_tags.push_back( target_pt );
+                    used_inds.push_back( i_ln2 );
+                    break;
+                }
+                if (bndry_pts[i_ln2][1].second == target_pt) {
+                    curveLoop.push_back( -surf_gln_pairs[i_surf][i_ln2].second );
+                    target_pt = bndry_pts[i_ln2][0].second;
+                    all_pt_tags.push_back( target_pt );
+                    used_inds.push_back( i_ln2 );
+                    break;
+                }
+            }
+        }
+        // Ensure that all lines were used, and that there are as many points recorded in all_pt_tags as there are lines in bndry_pts
+        assert (used_inds.size() == bndry_pts.size()); assert (all_pt_tags.size() == bndry_pts.size());
+        
+        
+        // Create the curve loop and corresponding plane surface
+        int curveLoop_tag = gmsh::model::occ::addCurveLoop(curveLoop);
+        int surf_gID = gmsh::model::occ::addPlaneSurface({curveLoop_tag});
+        gsurf_IDs.push_back(surf_gID);
+
+                    
+
+
+        // Add the gmsh surface tag to gln_gsurf_pairs
+        for (int i_gln = 0; i_gln < surf_gln_pairs[i_surf].size(); i_gln++) { gln_gsurf_pairs[surf_gln_pairs[i_surf][i_gln].second].push_back( surf_gID ); }
+        
+        
+    }
+    cout << endl << "    Created " << gsurf_IDs.size() << " gmsh surfaces." << endl;
+    cout << "    Complete!" << endl;
+
+
+    // Create the volume
+    int gsurfLoop = gmsh::model::occ::addSurfaceLoop(gsurf_IDs);
+    int gvol = gmsh::model::occ::addVolume({gsurfLoop});
+
+    return {{3, gvol}};
+}
+
+
+
+
+
+
+
+
+
+
+// ========================================
 // Function for importing and cutting STL geometry in gmsh
 // ========================================
 
 std::vector<std::pair<int, int>> importAndCutSTLVolume(const string &STL_file_path, const double &geo_scale, const std::vector<std::vector<double>> &AR_planes)
 {
-    gmsh::option::setNumber("Geometry.OCCAutoFix", 0); // We set this to zero, because if we do not, addSurfaceLoop may create duplicate surfaces.
+    //gmsh::option::setNumber("Geometry.OCCAutoFix", 0); // If 1, addSurfaceLoop will create duplicate surfaces while forming surface loop so that surface normals are outward (crutial for getMass function). If 0, addSurfaceLoop will not make the duplicate surfaces, and normals may not be in sync.
 
     // Define the function name
     const string FUNCTION_NAME = "importAndCutSTLVolume()";
     double tol = 1e-10;
+    double meshSize = 1.0;
 
     // Get the number of AR volumes defined according to the AR cut planes provided
     int N_AR = 1;
@@ -1370,7 +1659,7 @@ std::vector<std::pair<int, int>> importAndCutSTLVolume(const string &STL_file_pa
         cout << "\r    Considering point  i_coord = " << i_coord << "/" << coord_ln_surf_pairs.size() - 1 << "." << std::flush;
         std::vector<double> &coords_current = std::get<0>(coord_ln_surf_pairs[i_coord]);
         if (i_coord == 0) {
-            pt_gID = gmsh::model::occ::addPoint(coords_current[0], coords_current[1], coords_current[2], 1.0); // Create the point
+            pt_gID = gmsh::model::occ::addPoint(coords_current[0], coords_current[1], coords_current[2], meshSize); // Create the point
             gpt_vol_pairs.SetMinInd(pt_gID);
             gpt_vol_pairs.push_back( assignARIndex(coords_current, AR_planes, tol) );
             AR_corner_pts.checkAndAddPoint({coords_current, pt_gID});
@@ -1381,7 +1670,7 @@ std::vector<std::pair<int, int>> importAndCutSTLVolume(const string &STL_file_pa
             std::vector<double> &coords_prev = std::get<0>(coord_ln_surf_pairs[i_coord - 1]);
             if (coords_current[0] == coords_prev[0] && coords_current[1] == coords_prev[1] && coords_current[2] == coords_prev[2]) { } // pass; do not create a new point if the coordinates match the previous point
             else {
-                pt_gID = gmsh::model::occ::addPoint(coords_current[0], coords_current[1], coords_current[2], 1.0); // Create the point
+                pt_gID = gmsh::model::occ::addPoint(coords_current[0], coords_current[1], coords_current[2], meshSize); // Create the point
                 gpt_vol_pairs.push_back( assignARIndex(coords_current, AR_planes, tol) );
                 AR_corner_pts.checkAndAddPoint({coords_current, pt_gID});
                 //isARCornerPoint({coords_current, pt_gID}, AR_corner_pts, tol);
@@ -1526,7 +1815,7 @@ std::vector<std::pair<int, int>> importAndCutSTLVolume(const string &STL_file_pa
                     if (i_d2 == i_d) { new_pt_coord[i_d2] = AR_planes[i_d][i_ARp]; }
                     else { new_pt_coord[i_d2] = (pt_coords[1][i_d2] - pt_coords[0][i_d2]) / (pt_coords[1][i_d] - pt_coords[0][i_d]) * (AR_planes[i_d][i_ARp] - pt_coords[0][i_d]) + pt_coords[0][i_d2]; }
                 }
-                pt_gID = gmsh::model::occ::addPoint(new_pt_coord[0], new_pt_coord[1], new_pt_coord[2], 1.0); // Create the point
+                pt_gID = gmsh::model::occ::addPoint(new_pt_coord[0], new_pt_coord[1], new_pt_coord[2], meshSize); // Create the point
                 gpt_vol_pairs.push_back( assignARIndex(new_pt_coord, AR_planes, tol) );
                 AR_corner_pts.checkAndAddPoint({new_pt_coord, pt_gID});
                 //isARCornerPoint({new_pt_coord, pt_gID}, AR_corner_pts, tol);
@@ -1795,7 +2084,7 @@ std::vector<std::pair<int, int>> importAndCutSTLVolume(const string &STL_file_pa
         // If the AR corner point is inside the computational domain, and it has not yet been created, create it and add the point to the various variables
         if (AR_corner_pts.isInside[i_pt] == 1 && std::get<1>(AR_corner_pts.AR_corner_pts[i_pt]) == false) {
             std::vector<double> &ARcoords = std::get<0>(AR_corner_pts.AR_corner_pts[i_pt]);
-            pt_gID = gmsh::model::occ::addPoint(ARcoords[0], ARcoords[1], ARcoords[2], 1.0); // Create the point
+            pt_gID = gmsh::model::occ::addPoint(ARcoords[0], ARcoords[1], ARcoords[2], meshSize); // Create the point
             gpt_vol_pairs.push_back( assignARIndex(ARcoords, AR_planes, tol) );
             for (int i = 0; i < gpt_vol_pairs[pt_gID].size(); i++) {
                 vol_gpt_AR_corners[ gpt_vol_pairs[pt_gID][i] ].push_back( pt_gID );
@@ -2688,8 +2977,9 @@ std::vector<std::pair<int, int>> importAndCutSTLVolume(const string &STL_file_pa
         // Create the gmsh surface loops and cut volumes from the surface loops found
         for (int i_sl = 0; i_sl < surfaceLoops.size(); i_sl++) {
             int gsurfLoop = gmsh::model::occ::addSurfaceLoop(surfaceLoops[i_sl]);
-            gvol = gmsh::model::occ::addVolume({gsurfLoop});
             
+            gvol = gmsh::model::occ::addVolume({gsurfLoop});
+
             // Change gvol_first if it is the first gvol created in order to count the gmsh volumes created
             if (gvol_first == -1) { gvol_first = gvol; }
 
@@ -2700,8 +2990,7 @@ std::vector<std::pair<int, int>> importAndCutSTLVolume(const string &STL_file_pa
     cout << endl << "    Created " << gvol_gformat[gvol_gformat.size() - 1].second - (gvol_first - 1) << " gmsh volumes." << endl;
     cout << "    Complete!" << endl;
     
-
-
+    
 
     //std::vector<std::pair<int, int>> all_entities;
     //gmsh::model::getEntities(all_entities, 2);
@@ -2710,12 +2999,113 @@ std::vector<std::pair<int, int>> importAndCutSTLVolume(const string &STL_file_pa
 
 
 
+
+
+
+    /*
+    int p1 = gmsh::model::occ::addPoint(10, 10, 10);
+    int p2 = gmsh::model::occ::addPoint(11, 10, 10);
+    int p3 = gmsh::model::occ::addPoint(11, 11, 10);
+    int p4 = gmsh::model::occ::addPoint(10, 11, 10);
+
+    int p5 = gmsh::model::occ::addPoint(10, 10, 11);
+    int p6 = gmsh::model::occ::addPoint(11, 10, 11);
+    int p7 = gmsh::model::occ::addPoint(11, 11, 11);
+    int p8 = gmsh::model::occ::addPoint(10, 11, 11);
+
+    int p9 = gmsh::model::occ::addPoint(10, 10, 12);
+    int p10 = gmsh::model::occ::addPoint(11, 10, 12);
+    int p11 = gmsh::model::occ::addPoint(11, 11, 12);
+    int p12 = gmsh::model::occ::addPoint(10, 11, 12);
+
+    
+    int l1 = gmsh::model::occ::addLine(p1, p2);
+    int l2 = gmsh::model::occ::addLine(p2, p3);
+    int l3 = gmsh::model::occ::addLine(p3, p4);
+    int l4 = gmsh::model::occ::addLine(p4, p1);
+
+    int l5 = gmsh::model::occ::addLine(p5, p6);
+    int l6 = gmsh::model::occ::addLine(p6, p7);
+    int l7 = gmsh::model::occ::addLine(p7, p8);
+    int l8 = gmsh::model::occ::addLine(p8, p5);
+
+    int l9 = gmsh::model::occ::addLine(p1, p5);
+    int l10 = gmsh::model::occ::addLine(p2, p6);
+    int l11 = gmsh::model::occ::addLine(p3, p7);
+    int l12 = gmsh::model::occ::addLine(p4, p8);
+    
+    int l13 = gmsh::model::occ::addLine(p9, p10);
+    int l14 = gmsh::model::occ::addLine(p10, p11);
+    int l15 = gmsh::model::occ::addLine(p11, p12);
+    int l16 = gmsh::model::occ::addLine(p12, p9);
+    
+    int l17 = gmsh::model::occ::addLine(p5, p9);
+    int l18 = gmsh::model::occ::addLine(p6, p10);
+    int l19 = gmsh::model::occ::addLine(p7, p11);
+    int l20 = gmsh::model::occ::addLine(p8, p12);
+    
+
+    int cl1 = gmsh::model::occ::addCurveLoop({-l1, -l4, -l3, -l2});
+    int cl2 = gmsh::model::occ::addCurveLoop({l5, l6, l7, l8});
+    int cl3 = gmsh::model::occ::addCurveLoop({l1, l10, -l5, -l9});
+    int cl4 = gmsh::model::occ::addCurveLoop({l2, l11, -l6, -l10});
+    int cl5 = gmsh::model::occ::addCurveLoop({l3, l12, -l7, -l11});
+    int cl6 = gmsh::model::occ::addCurveLoop({l4, l9, -l8, -l12});
+
+    int cl7 = gmsh::model::occ::addCurveLoop({-l5, -l8, -l7, -l6});
+    int cl8 = gmsh::model::occ::addCurveLoop({l13, l14, l15, l16});
+    int cl9 = gmsh::model::occ::addCurveLoop({l5, l18, -l13, -l17});
+    int cl10 = gmsh::model::occ::addCurveLoop({l6, l19, -l14, -l18});
+    int cl11 = gmsh::model::occ::addCurveLoop({l7, l20, -l15, -l19});
+    int cl12 = gmsh::model::occ::addCurveLoop({l8, l17, -l16, -l20});
+
+
+    int ps1 = gmsh::model::occ::addPlaneSurface({cl1});
+    int ps2 = gmsh::model::occ::addPlaneSurface({cl2});
+    int ps3 = gmsh::model::occ::addPlaneSurface({cl3});
+    int ps4 = gmsh::model::occ::addPlaneSurface({cl4});
+    int ps5 = gmsh::model::occ::addPlaneSurface({cl5});
+    int ps6 = gmsh::model::occ::addPlaneSurface({cl6});
+
+    int ps7 = gmsh::model::occ::addPlaneSurface({cl7});
+    int ps8 = gmsh::model::occ::addPlaneSurface({cl8});
+    int ps9 = gmsh::model::occ::addPlaneSurface({cl9});
+    int ps10 = gmsh::model::occ::addPlaneSurface({cl10});
+    int ps11 = gmsh::model::occ::addPlaneSurface({cl11});
+    int ps12 = gmsh::model::occ::addPlaneSurface({cl12});
+
+
+    int sl1 = gmsh::model::occ::addSurfaceLoop({ps1, ps2, ps3, ps4, ps5, ps6});
+    int sl2 = gmsh::model::occ::addSurfaceLoop({ps7, ps8, ps9, ps10, ps11, ps12});
+
+    int v1 = gmsh::model::occ::addVolume({sl1});
+    int v2 = gmsh::model::occ::addVolume({sl2});
+    */
+
+
+
+
+
     // Synchronize the curve loops and surfaces that were created
     cout << FILE_NAME << ": " << FUNCTION_NAME << ": Synchronizing..." << endl;
     gmsh::model::occ::synchronize();
     cout << "    Complete!" << endl;
 
-       
+
+    /*
+    gmsh::model::addPhysicalGroup(3, {v1});
+    gmsh::model::addPhysicalGroup(3, {v2});
+
+
+
+    
+    double AR_pore_space_area;
+    gmsh::model::occ::getMass(3, v1, AR_pore_space_area);
+    cout << "VOLUME " << AR_pore_space_area << endl;
+    gmsh::model::occ::getMass(3, v2, AR_pore_space_area);
+    cout << "VOLUME " << AR_pore_space_area << endl;
+    exit(1);
+    */
 
 
 

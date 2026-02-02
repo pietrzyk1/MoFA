@@ -374,6 +374,7 @@ public:
 //   Declare the class for creating the averaging operator from
 //   the finite element space of a variable.
 // ===============================================================
+/*
 class AveragingOperator
 {
 private:
@@ -541,6 +542,180 @@ public:
     // Function for getting a diagonal matrix of the AR pore areas
     SparseMatrix GetAR_areas_SpMat();
 };
+*/
+
+
+// ===============================================================
+//   Declare the class for creating the averaging operator from
+//   the finite element space of a variable.
+// ===============================================================
+class AveragingOperator
+{
+private:
+    string upscaling_theory;
+
+    int N_AR;
+    int vdim;
+    int DOFs_per_vdim; // This is for the dummy avg space (before making it size N_AR * vdim)
+    
+    FiniteElementSpace* fespace = nullptr;
+    unique_ptr<FiniteElementSpace> fespace_avg = nullptr;
+    unique_ptr<FiniteElementCollection> fec_avg = nullptr;
+    unique_ptr<MixedBilinearForm> varf_avg = nullptr;
+    
+    vector<vector<int>> AR_Elem_inds;
+    vector<vector<vector<int>>> AR_Dof_inds;
+
+    unique_ptr<SparseMatrix> avg_mat = nullptr;
+    Array<double> AR_areas;
+
+    SparseMatrix weighted_avg_mat;
+    bool correctARAreas = false;
+
+
+public:
+    // Class constructors
+    AveragingOperator(FiniteElementSpace *fespace_, string upscaling_theory_ = "MoFA") : fespace(fespace_), upscaling_theory(upscaling_theory_)
+    {
+        // Get the number of averaging regions defined by the mesh
+        if (upscaling_theory == "MoFA") { N_AR = fespace_->GetMesh()->attributes.Max(); } 
+        else if (upscaling_theory == "Homogenization") { N_AR = 1; }
+
+        vdim = fespace_->GetVDim(); // Get vdim (i.e., the number of vector components) used to define the finite element space
+        
+        for (int i = 0; i < N_AR; i++) { AR_Elem_inds.push_back(vector<int>()); } // Initialize AR_Elem_inds as an array of arrays
+        
+        AR_areas.SetSize(N_AR); // Initialize the size of the AR_areas vector
+
+        // Initialize AR_Dof_inds
+        for (int i_vd = 0; i_vd < vdim; i_vd++)
+        {
+            AR_Dof_inds.push_back(vector<vector<int>>());
+            for (int i_AR = 0; i_AR < N_AR; i_AR++) { AR_Dof_inds[i_vd].push_back(vector<int>()); }
+        }
+
+        // Carry out the initialization/avg. operator creation procedure
+        CreateDummyFESpace(fespace_->GetMesh(), vdim);
+        CreateBilinearForm(fespace_);
+        GetARIndices(fespace_->GetMesh());
+        CreateAvgOperator();
+        correctARAreas = true;
+    }
+    AveragingOperator(FiniteElementSpace *fespace_, vector<int> AR_tags, string upscaling_theory_ = "MoFA") : fespace(fespace_), upscaling_theory(upscaling_theory_)
+    {
+        // Get the number of averaging regions defined by the mesh
+        if (upscaling_theory == "MoFA") { N_AR = AR_tags.size(); } 
+        else if (upscaling_theory == "Homogenization") { N_AR = 1; }
+
+        vdim = fespace_->GetVDim(); // Get vdim (i.e., the number of vector components) used to define the finite element space
+        
+        for (int i = 0; i < N_AR; i++) { AR_Elem_inds.push_back(vector<int>()); } // Initialize AR_Elem_inds as an array of arrays
+        
+        AR_areas.SetSize(N_AR); // Initialize the size of the AR_areas vector
+
+        // Initialize AR_Dof_inds
+        for (int i_vd = 0; i_vd < vdim; i_vd++)
+        {
+            AR_Dof_inds.push_back(vector<vector<int>>());
+            for (int i_AR = 0; i_AR < N_AR; i_AR++) { AR_Dof_inds[i_vd].push_back(vector<int>()); }
+        }
+
+        // Carry out the initialization/avg. operator creation procedure
+        CreateDummyFESpace(fespace_->GetMesh(), vdim);
+        CreateBilinearForm(fespace_);
+        GetARIndices(fespace_->GetMesh(), AR_tags);
+        CreateAvgOperator();
+        correctARAreas = true;
+    }
+    AveragingOperator(FiniteElementSpace *fespace_, FiniteElementSpace *fespace_avg_, bool domain_avg = false) : fespace(fespace_), fespace_avg(fespace_avg_)
+    {
+        // Get the number of averaging regions that should be defined over the mesh
+        if (!domain_avg) { N_AR = fespace_->GetMesh()->attributes.Max(); } 
+        else { N_AR = 1; }
+
+        // Get vdim (i.e., the number of vector components) used to define the finite element space
+        vdim = fespace_->GetVDim();
+        
+        // Initialize AR_Elem_inds as an array of arrays
+        for (int i = 0; i < N_AR; i++) { AR_Elem_inds.push_back(vector<int>()); } 
+        
+        AR_areas.SetSize(N_AR); // Initialize the size of the AR_areas vector
+
+        // Initialize AR_Dof_inds
+        for (int i_vd = 0; i_vd < vdim; i_vd++)
+        {
+            AR_Dof_inds.push_back(vector<vector<int>>());
+            for (int i_AR = 0; i_AR < N_AR; i_AR++) { AR_Dof_inds[i_vd].push_back(vector<int>()); }
+        }
+
+        // Carry out the initialization/avg. operator creation procedure
+        DOFs_per_vdim = fespace_avg->FEColl()->GetFE(fespace->GetMesh()->GetElementBaseGeometry(0), 0)->GetDof(); // Get the number of DOFs per vector component of FiniteElementCollection
+        CreateBilinearForm(fespace_);
+        GetARIndices(fespace->GetMesh());
+        PrepareUnweightedAvgOperator();
+        correctARAreas = false;
+    }
+
+    // Function for creating the dummy avg finite element space that will be used to generate the averaging operator
+    void CreateDummyFESpace(Mesh *mesh_, const int vdim_);
+
+    // Function for creating the bilinear form used to generate the averaging operator
+    void CreateBilinearForm(FiniteElementSpace *fespace_);
+
+    // Function for getting 1.) the indices of elements inside each AR, and 2.) the indices of dofs (in the dummy space) of each element inside each AR
+    void GetARIndices(Mesh *mesh_, vector<int> AR_tags = {-1});
+
+    // Function for creating the averaging operator from the avg space and mixed bilinear form
+    void CreateAvgOperator(const double tol = 1e-15);
+
+    // Function for creating (but not finalizing) the unweighted averaging operator from the avg space and mixed bilinear form,
+    // as well as computing the AR pore-space areas.
+    void PrepareUnweightedAvgOperator(const double tol = 1e-15);
+
+    // Function for creating (and finalizing) the weighted averaging operator from the non-finalized unweighted averaging operator.
+    void CreateWeightedAvgOperator(const GridFunction &weight_func);
+
+    // Function that zeroes-out the columns of the avging operator corresponding to DOFs marked by "bdr_attr_is_ess".
+    // For the zeroed entries, the function multiplies the "pre-zeroed" entry value by the corresponding value in "sol" and subtracts the product from "rhs".
+    void EliminateTrialEssentialBC(const Array<int> &bdr_attr_is_ess, const Vector &sol, Vector &rhs);
+
+    // Function for applying the averaging operator
+    void ApplyAvgOperator(const Vector &x, Vector &avg);
+    void ApplyAvgOperator(const Vector &x, Vector &avg, const vector<double> &porosities);
+    void ApplyWeightedIntegralOperator(const Vector &x, Vector &avg);
+
+
+    // Static method for computing the AR porosities
+    static void ComputePorosities(const vector<double> &pore_areas, const vector<double> &AR_areas, vector<double> &porosities);
+    
+
+    // Function to get the number of averaging regions
+    int GetNAR() { return N_AR; }
+
+    // Function to get the vector dimension of the operator
+    int Getvdim() { return vdim; }
+
+    // Function to get the averaging region areas
+    Array<double> GetAR_areas() { if (correctARAreas) {return AR_areas;} else { cout << "AveragingOperator: GetAR_areas(): AR areas should only be obtained from an unweighted AveragingOperator." << endl; exit(1); } }
+    vector<double> GetAR_areas_vector()
+    {
+        Array<double> AR_areas_Array(this->GetAR_areas());
+        vector<double> AR_areas_vector(AR_areas_Array.GetData(), AR_areas_Array.GetData() + AR_areas_Array.Size());
+        return AR_areas_vector;
+    }
+
+    // Function to get the averaging operator matrix
+    SparseMatrix* Getavg_mat() { return avg_mat.get(); }
+
+    // Function meant to mimic MFEM's SparseMatrix return on the (Mixed)BilinearForm class
+    //SparseMatrix &SpMat() { return *avg_mat; }
+
+    // Function to get a reference to AR_Dof_inds
+    vector<vector<vector<int>>> &GetAR_Dof_inds() { return AR_Dof_inds; }
+
+    // Function for getting a diagonal matrix of the AR pore areas
+    SparseMatrix GetAR_areas_SpMat();
+};
 
 
 
@@ -574,7 +749,7 @@ public:
         vector<vector<int>> AR_Elem_inds;
         vector<vector<vector<int>>> AR_Dof_inds;
 
-        HypreParMatrix* avg_mat;
+        HypreParMatrix* avg_mat = nullptr;
         SparseMatrix Dmat, ODmat;
         Array<double> AR_areas;
         Array<HYPRE_BigInt> row_starts;
@@ -1009,6 +1184,9 @@ public:
     // Function for clearing and reassigning variable "mesh" to the object pointed at by "parent_mesh"
     void UseParentMesh();
 
+    // Function for clearing the "parent_mesh" (because it can be expensive)
+    void DeleteParentMesh();
+
     // Function for clearing and reassigning variable "mesh" to the object pointed at by "local_mesh", but as a Mesh object, not a SubMesh object
     void UseLocalMesh();
 
@@ -1059,14 +1237,14 @@ class GridFunctionManager
 protected:
     std::unique_ptr<ifgzstream> gf_ifgz_stream;
     
-    FiniteElementSpace *fes;
+    FiniteElementSpace *fes = nullptr;
     
     string fec_name;
     int fec_order;
     int fes_dim;
 
     std::shared_ptr<GridFunction> gf;
-        
+    
     std::unique_ptr<FiniteElementCollection> fec_local;
     std::unique_ptr<FiniteElementSpace> fes_local;
     std::shared_ptr<GridFunction> gf_local;
@@ -1075,8 +1253,8 @@ protected:
     Mesh *gf_mesh = nullptr;
     
     #ifdef MPI_BUILD
-        ParGridFunction *par_gf;
-        FiniteElementSpace *par_fes;
+        ParGridFunction *par_gf = nullptr;
+        FiniteElementSpace *par_fes = nullptr;
     #endif
 
 public:
@@ -1217,6 +1395,7 @@ public:
     
     // Functions for providing access to variables in the class
     VectorGridFunctionCoefficient* GetVectorGridFunctionCoefficient() { return &vgfc; }
+    VectorGridFunctionCoefficient& GetVectorGridFunctionCoefficientRef() { return vgfc; }
 
 
     // Define functions for MPI-parallel

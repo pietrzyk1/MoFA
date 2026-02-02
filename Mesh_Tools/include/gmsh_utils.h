@@ -59,15 +59,18 @@ std::vector<std::vector<std::vector<std::vector<double>>>> getVolumeCoords(int v
 
 //std::vector<double> getMinMaxLineCoords(int tag); // Can be incorporated in getEntityMinMaxCoords (but also is not used to my knowledge...)
 // Here:
-//      tag: a line tag
+//      tag: a line tag.
 
 std::vector<double> getMinMaxSurfaceCoords(int tag); // probably no longer needed due to getEntityMinMaxCoords
 // Here:
-//      tag: a surface tag
+//      tag: a surface tag.
 
 std::vector<double> getEntityMinMaxCoords(const std::pair<int, int> &dimtag);
+std::vector<double> getEntityMinMaxCoords(const std::vector<std::pair<int, int>> &dimtag);
 // Here:
-//      dimtag: an entity's dim-tag pair
+//      dimtag: an entity's dim-tag pair, or a vector of dim-tag pairs from different entities.
+
+
 
 
 
@@ -288,6 +291,8 @@ bool createMergedARGroups(const std::vector<std::pair<int, int>> &ARs,
 bool createMergedARGroups(const std::vector<std::pair<int, int>> &ARs,
     double min_vol_threshold, double max_AR_length, double max_AR_length_ratio,
     std::vector<std::vector<int>> &AR_tags_toBeMerged, std::vector<double> &AR_pore_space_vols);
+bool createMergedARGroups_core(int dim, std::vector<std::pair<std::vector<int>, double>> &AR_mergeGroups_mass_pairs,
+    double min_vol_threshold, double max_AR_length, double max_AR_length_ratio);
 // Here:
 //      ARs: a vector of surfaces that exist in the ARs after the cut. They have the form {{dim, tag}, ...}
 //      min_vol_threshold: the minimum allowable AR area/volume
@@ -369,8 +374,11 @@ void getDomainBoundaryLineTags(const std::vector<std::vector<int>> &ln_tags_in_A
 //      L_y: the height of the domain
 
 void getDomainBoundarySurfaceTags(const std::vector<std::vector<int>> &surf_tags_in_AR,
-    std::vector<std::vector<int>> &domain_boundary_tags, const std::vector<double> &L);
+    std::vector<std::vector<int>> &domain_boundary_tags, const std::vector<std::pair<int, int>> &ARs,
+    std::vector<std::vector<int>> &AR_tags_neighbors, const std::vector<double> &L);
 // Here:
 //      surf_tags_in_AR: a nested vector of: first level = AR, second level = AR interface surface tags
 //      domain_boundary_tags: a nested vector of: first level = top, bottom, left, right, front, back, and unused surface tags, second level = surface tags
+//      ARs: a vector gmsh formatted AR surface tags. They have the form {{dim, tag}, ...}
+//      AR_tags_neighbors: a nested vector of AR inds that touch the top, bottom, left, and right domain boundaries. First level = top, bottom, left, and right; second level = AR inds
 //      L = {L_x, L_y, L_z}: the length of the domain in each direction

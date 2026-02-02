@@ -19,6 +19,8 @@
 Utility/include/mfem_util_STAGED.h
 Utility/src/mfem_util_STAGED.cpp
 Input_File_Generator/include/generate_input_file_STAGED.h
+Input_File_Generator/include/generate_input_file_TOOLS_STAGED.h
+
 
 Machine_Learning_Tools/*
 

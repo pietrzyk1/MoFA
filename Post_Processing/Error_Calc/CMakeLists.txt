@@ -21,13 +21,12 @@ cmake_minimum_required(VERSION ${CMAKE_MIN_VERSION})
 # Tell CMake the project name and version to be built
 project(Error_Calc)
 
+# Set the executable to be created in the bin directory of the project source directory (this line must be placed after defining the project)
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${PROJECT_SOURCE_DIR}/bin)
 
 # Tell CMake the directory containing the project's header files (i.e., the .h files). This is often in the /include directory.
 include_directories(${UTILITY_SOURCE_DIR}/include)
 
-
-# Set the executable to be created in the bin directory of the project source directory
-set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${PROJECT_SOURCE_DIR}/bin)
 
 # Add the executable we want to build. The first argument will be the name of the produced executable..
 add_executable(error_calc ${PROJECT_SOURCE_DIR}/src/Error_Calc.cpp ${UTILITY_SOURCE_DIR}/src/JSON_IO.cpp)
