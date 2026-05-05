@@ -1,4 +1,4 @@
-#lL.lH.
+# lL.lH.
 #
 # Copyright (c) 2025, Lawrence Livermore National Security, LLC
 # and other MoFA project developers. All Rights reserved.
@@ -9,7 +9,7 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 #
-#lL.lH.
+# lL.lH.
 
 # Include the path configuration cmake file for the various source directory paths
 include(${CMAKE_SOURCE_DIR}/../../cmake/Configuration_Paths.cmake)
@@ -35,6 +35,9 @@ include_directories(${UTILITY_SOURCE_DIR}/include)
 # If BUILD_FOR_SERIAL is 'ON' (check cmake/Configuration_Paths.cmake), then build the solver assuming the serial build of MFEM.
 if(BUILD_FOR_SERIAL)
 
+    #------------------------
+    # Build the normal upscaled solver
+    #------------------------
     # Add the executable we want to build. The first argument will be the name of the produced executable.
     add_executable(upscaled_solver_scalar ${PROJECT_SOURCE_DIR}/src/Upscaled_Solver_Scalar.cpp ${UTILITY_SOURCE_DIR}/src/JSON_IO.cpp ${UTILITY_SOURCE_DIR}/src/mfem_util.cpp)
 
@@ -46,6 +49,25 @@ if(BUILD_FOR_SERIAL)
 
     # Tell CMake any libraries to link to the project's executable. If you told CMake the directories containing the project's libraries in "link_directories", you can simply put the library names in the second argument. Otherwise, put the full path to the library file (i.e., the .a, .so, or .lib file) in the second argument.
     target_link_libraries(upscaled_solver_scalar PRIVATE libmfem.a)
+
+    #------------------------
+    # Build the periodic upscaled solver
+    #------------------------
+    if(EXISTS ${PROJECT_SOURCE_DIR}/src/Upscaled_Transport_Solver_Periodic.cpp)
+    
+        # Add the executable we want to build. The first argument will be the name of the produced executable.
+        add_executable(upscaled_transport_solver_periodic ${PROJECT_SOURCE_DIR}/src/Upscaled_Transport_Solver_Periodic.cpp ${UTILITY_SOURCE_DIR}/src/JSON_IO.cpp ${UTILITY_SOURCE_DIR}/src/mfem_util.cpp)
+
+        # Tell CMake any directories containing the project's library files (i.e., the .a, .so, or .lib files). This is often the ./lib directories.
+        target_link_directories(upscaled_transport_solver_periodic PRIVATE ${MFEM_SOURCE_DIR})
+
+        # Tell CMake any directories containing the project's header files (i.e., the .h files). This is often the ./include directories.
+        target_include_directories(upscaled_transport_solver_periodic PRIVATE ${MFEM_SOURCE_DIR})
+
+        # Tell CMake any libraries to link to the project's executable. If you told CMake the directories containing the project's libraries in "link_directories", you can simply put the library names in the second argument. Otherwise, put the full path to the library file (i.e., the .a, .so, or .lib file) in the second argument.
+        target_link_libraries(upscaled_transport_solver_periodic PRIVATE libmfem.a)
+    
+    endif()
 
 endif()
 

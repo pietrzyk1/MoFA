@@ -179,7 +179,8 @@ int main(int argc, char *argv[])
     string mesh_info_file_path = mesh_info_dir + mesh_info_file_name;
     string fluid_velocity_file_path = fluid_velocity_dir + fluid_velocity_file_name;
     string fluid_velocity_mesh_file_path = fluid_velocity_dir + fluid_velocity_mesh_file_name;
-    
+    string mesh_output_file_path = mesh_output_dir + mesh_output_file_name;
+
     
     // ===============================================================
     //   Define the option parser and add options that can be changed from the command line
@@ -209,18 +210,31 @@ int main(int argc, char *argv[])
     // ===============================================================
     // Get the boundary attributes for the mesh (NOTE: the provided attribute tags are 1 more than the actual Array index used to assign essential boundary conditions (SEE BELOW))
     JSONDict mesh_info; mesh_info.loadFromFile(mesh_info_file_path);
+    
+    // Get the domain lengths, L
+    globalVars.L = (*mesh_info["geometry"])["L"];
+
+    // Get the AR tags and AR area type
     vector<int> AR_tags = (*mesh_info["AR"])["tags"];
     string avg_area_type = (*mesh_info["AR"])["area_type"];
-    globalVars.L = (*mesh_info["geometry"])["L"];
+    
+    // Get the physical groups (or tags) for the inlet and no slip boundaries
+    vector<int> inlet_PGs = (*mesh_info["scalar_closure"])["inlet1"];
+    
 
     // Use the provided mesh file path to define the mesh 
     MeshManager mesh_manager(mesh_file_path);
     
     // Make the mesh periodic if required by isPeriodic
-    mesh_manager.MakePeriodic(isPeriodic, globalVars.L);
+    mesh_manager.MakePeriodicMesh(isPeriodic, globalVars.L, true);
     
     // Get a pointer to the mesh being used
     Mesh *mesh = mesh_manager.GetMesh();
+    
+    // Save the non-periodic mesh (for later viewing and reloading)
+    ofstream mesh_ofs(mesh_output_file_path);
+    mesh_ofs.precision(8);
+    mesh_manager.GetParentMesh()->Print(mesh_ofs);
     
 
     // ===============================================================
@@ -234,6 +248,11 @@ int main(int argc, char *argv[])
     cout << globalVars.FILENAME << ": Number of unknowns in concentration: " << fespace_c->GetTrueVSize() << endl;
     cout << globalVars.FILENAME << ": Number of unknowns in total: " << fespace_c->GetTrueVSize() << endl;
 
+    // Create an FEspace and gridfunction on the non-periodic mesh. This will be used for saving (i.e., project from periodic to non-periodic and save)
+    std::unique_ptr<FiniteElementCollection> fec_c_nnprdc = std::make_unique<H1_FECollection>(order, mesh_manager.GetParentMesh()->Dimension());
+    std::unique_ptr<FiniteElementSpace> fespace_c_nnprdc = std::make_unique<FiniteElementSpace>(mesh_manager.GetParentMesh(), fec_c_nnprdc.get(), 1);
+    GridFunction sol_nnprdc(fespace_c_nnprdc.get());
+    
     
     // ===============================================================
     //   Load the fluid velocity for advection
@@ -255,6 +274,27 @@ int main(int argc, char *argv[])
         fluid_velocity_vgfc_manager->MakeVectorGridFunctionCoefficient();
         fluid_velocity = fluid_velocity_vgfc_manager->GetVectorGridFunctionCoefficient();
         cout << "Complete." << endl;
+
+        
+        // ======== For Debugging ========
+        //Mesh *mesh2 = fluid_velocity_vgfc_manager->GetGridFunctionMesh();
+        //FiniteElementCollection *fec_u_save = new H1_FECollection(2, mesh->Dimension());
+        //FiniteElementSpace *fespace_u_save = new FiniteElementSpace(mesh, fec_u_save, mesh->Dimension());
+        //GridFunction u_gf_save(fespace_u_save);
+
+        //u_gf_save.ProjectGridFunction(*fluid_velocity_vgfc_manager->GetGridFunction());
+        //u_gf_save.ProjectCoefficient(*fluid_velocity);
+
+        //u_gf_save.Save((mesh_output_dir + "fluid_velocity_verification_plot.gf").c_str());
+        //mesh->Save(mesh_output_dir + "fluid_velocity_verification_mesh.mesh");
+        //exit(1);
+        //ostringstream mesh_name; mesh_name << "fluid_velocity_verification_mesh.mesh";
+        //ofstream mesh_ofs((mesh_output_dir + mesh_name.str()).c_str());
+        //mesh_ofs.precision(8);
+        //mesh->Print(mesh_ofs);
+        //exit(1);
+        // ===============================
+        
     }
 
 
@@ -264,7 +304,7 @@ int main(int argc, char *argv[])
     // Here, we are defining two marker arrays to mark 1.) the inlet, and 2.) the outlet.
     Array<int> marker_inlet_BC(mesh->bdr_attributes.Max()); // Define a marker array for the inlet BC
     marker_inlet_BC = 0; // Initialize marker array to "don't apply any essential BC"
-    marker_inlet_BC[(int)(*mesh_info["scalar_closure"])["inlet1"] - 1] = 1; // Set the first bdr attr group (i.e., physical group defined as 1 in gmsh file) as being the inlet
+    for (int i_BCin = 0; i_BCin < inlet_PGs.size(); i_BCin++) { marker_inlet_BC[inlet_PGs[i_BCin] - 1] = 1; } // Set the first bdr attr group (i.e., physical group defined as 1 in gmsh file) as being the inlet
     DirichlettBC *inlet_BC = new DirichlettBC(*fespace_c, marker_inlet_BC);
     inlet_BC->SetTemporallyDependentFunction( inlet_BC_func_T );
     inlet_BC->SetSpatiallyDependentFunction( inlet_BC_func_X );
@@ -373,7 +413,8 @@ int main(int argc, char *argv[])
 
     // Save the initial condition for the pore-scale and average pore-scale results
     int save_count = 0;
-    sol_BLK0_ref.Save((output_dir + output_file_name_prefix + to_string(save_count) + output_file_name_suffix).c_str());
+    sol_nnprdc.ProjectGridFunction(sol_BLK0_ref);
+    sol_nnprdc.Save((output_dir + output_file_name_prefix + to_string(save_count) + output_file_name_suffix).c_str());
     save_count += 1;
     avgOp->ApplyAvgOperator(sol_BLK, sol_avg, porosities);
     for (int i = 0; i < sol_avg.Size(); i++) { avg_sol[i].push_back(sol_avg.Elem(i)); }
@@ -414,7 +455,9 @@ int main(int argc, char *argv[])
         if (i_step % output_interval == 0)
         {
             // Save the pore-scale solution as a gridfunction, and the average pore-scale solution in the vector structure
-            sol_BLK0_ref.Save((output_dir + output_file_name_prefix + to_string(save_count) + output_file_name_suffix).c_str());
+            //sol_BLK0_ref.Save((output_dir + output_file_name_prefix + to_string(save_count) + output_file_name_suffix).c_str());
+            sol_nnprdc.ProjectGridFunction(sol_BLK0_ref);
+            sol_nnprdc.Save((output_dir + output_file_name_prefix + to_string(save_count) + output_file_name_suffix).c_str());
             save_count += 1;
             avgOp->ApplyAvgOperator(sol_BLK, sol_avg, porosities);
             for (int i = 0; i < sol_avg.Size(); i++) {
@@ -431,10 +474,7 @@ int main(int argc, char *argv[])
     // Print the final average solutions (for debugging purposes...)
     avgOp->ApplyAvgOperator(sol_BLK, sol_avg, porosities);
     cout << "The averaged concentrations :" << endl;
-    for (int i = 0; i < sol_avg.Size(); i++)
-    {
-        cout << sol_avg.Elem(i) << endl;
-    }
+    for (int i = 0; i < sol_avg.Size(); i++) { cout << sol_avg.Elem(i) << endl; }
 
 
     // ===============================================================
@@ -462,9 +502,6 @@ int main(int argc, char *argv[])
     AR_dict_temp["pore_areas"] = AR_pore_areas;
     mesh_info["AR"] = &AR_dict_temp;
     mesh_info.saveToFile(mesh_info_file_path);
-    
-    // Save the mesh
-    mesh->Save(mesh_output_dir + mesh_output_file_name);
 
 
     // ===============================================================

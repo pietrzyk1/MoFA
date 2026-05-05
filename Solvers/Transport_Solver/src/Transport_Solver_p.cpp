@@ -49,7 +49,9 @@ private:
     Vector sol_vec_nonTrue;
 
     string prefix, suffix, output_dir;
-    bool IsSetPrefix = false, IsSetSuffix = false, IsSetOutputDir = false;
+    bool IsSetPrefix = false, IsSetSuffix = false, IsSetOutputDir = false, IsSetMeshSerial = false;
+
+    Mesh *mesh_serial = nullptr;
 
 
     // Define private class methods
@@ -65,11 +67,12 @@ private:
     }
 
     // Define a function for saving a solution vector in serial (i.e., one output that combines the solutions of all ranks)
-    void SaveSerialSol(Mesh &mesh_serial)
+    void SaveSerialSol(Mesh &mesh_serial_)
     {
         // Have rank 0 save the entire serial/global solution as one gridfunction
+        GridFunction sol_serial = sol_gf_nonTrue.GetSerialGridFunction(0, mesh_serial_);
         ofstream sol_ofs_asone((output_dir + prefix + to_string(save_count) + suffix).c_str()); //+ ".serial").c_str());
-        GridFunction sol_serial = sol_gf_nonTrue.GetSerialGridFunction(0, mesh_serial);
+        sol_ofs_asone.precision(8);
         sol_serial.Save(sol_ofs_asone);
     }
 
@@ -88,14 +91,15 @@ public:
     void SetPrefix(string &prefix_) { prefix = prefix_; IsSetPrefix = true; }
     void SetSuffix(string &suffix_) { suffix = suffix_; IsSetSuffix = true; }
     void SetOutputDir(string &output_dir_) { output_dir = output_dir_; IsSetOutputDir = true; }
+    void SetSerialMesh(Mesh *mesh_serial_) { mesh_serial = mesh_serial_; IsSetMeshSerial = true; }
     
     // Define a function for saving a provided solution vector as a gridfunction. The solution is saved by individual ranks, as well as combined to be saved as a serial solution
-    void Save(Vector &tsol, Mesh &mesh_serial)
+    void Save(Vector &tsol)
     {
-        assert (IsSetPrefix && IsSetSuffix && IsSetOutputDir);
+        assert (IsSetPrefix && IsSetSuffix && IsSetOutputDir && IsSetMeshSerial);
         sol_gf_nonTrue.Distribute(tsol);
         SaveParSol();
-        SaveSerialSol(mesh_serial);
+        SaveSerialSol(*mesh_serial);
         save_count += 1;
     }
 };
@@ -290,16 +294,23 @@ int main(int argc, char *argv[])
 
     // Get the boundary attributes for the mesh (NOTE: the provided attribute tags are 1 more than the actual Array index used to assign essential boundary conditions (SEE BELOW))
     JSONDict mesh_info; mesh_info.loadFromFile(mesh_info_file_path);
+
+    // Get the domain lengths, L
+    globalVars.L = (*mesh_info["geometry"])["L"];
+
+    // Get the AR tags and AR area type
     vector<int> AR_tags = (*mesh_info["AR"])["tags"];
     string avg_area_type = (*mesh_info["AR"])["area_type"];
-    globalVars.L = (*mesh_info["geometry"])["L"];
+    
+    // Get the physical groups (or tags) for the inlet and no slip boundaries
+    vector<int> inlet_PGs = (*mesh_info["scalar_closure"])["inlet1"];
 
     
     // Use the provided mesh file path to define the mesh
     MeshManager mesh_manager(mesh_file_path);
     
     // Make the mesh periodic if required by isPeriodic
-    mesh_manager.MakePeriodic(isPeriodic, globalVars.L);
+    mesh_manager.MakePeriodicMesh(isPeriodic, globalVars.L, true);
     
     // Make the parallel-partitioned mesh and use it
     mesh_manager.MakeParallelMesh(MPI_COMM_WORLD);
@@ -327,13 +338,15 @@ int main(int argc, char *argv[])
         mesh->Print(mesh_ofs);
     }
 
-    // Have rank 0 also save the entire serial/global mesh for 
-    Mesh mesh_serial = mesh->GetSerialMesh(0);
+    // Have rank 0 also save the entire serial/global mesh. This will be saved on a non-periodic mesh, which was created in the background of the mesh manager
+    //Mesh mesh_serial = mesh->GetSerialMesh(0);
+    Mesh mesh_serial = mesh_manager.GetParentParMesh()->GetSerialMesh(0);
     if (rank == 0) {
         ofstream mesh_out((output_dir + mesh_output_file_name).c_str()); //+ ".serial").c_str());
+        mesh_out.precision(8);
         mesh_serial.Print(mesh_out);
     }
-    
+
 
     // ===============================================================
     //   Define the finite element space for the concentration.
@@ -379,42 +392,27 @@ int main(int argc, char *argv[])
         fluid_velocity = fluid_velocity_vgfc_manager->GetVectorGridFunctionCoefficient();
         if (rank == 0) { cout << "Complete." << endl; }
         
+        // ======== For Debugging ========
         /*
-        // For debugging
-        GridFunction u_gf_save(fluid_velocity_vgfc_manager->GetParGridFunctionFES());
-        u_gf_save = 0.0;
+        FiniteElementCollection *fec_c_save = new H1_FECollection(2, mesh->Dimension());
+        FiniteElementSpace *fespace_u_save = new FiniteElementSpace(mesh, fec_c_save, mesh->Dimension());
+        GridFunction u_gf_save(fespace_u_save);
+
+        //u_gf_save.ProjectGridFunction(*fluid_velocity_vgfc_manager->GetGridFunction());
         u_gf_save.ProjectCoefficient(*fluid_velocity);
-        u_gf_save.Save(("fluid_velocity_verification_plot" + to_string(rank) + ".gf").c_str());
-        
-        ostringstream mesh_name2;
-        mesh_name2 << mesh_output_file_name << "2." << setfill('0') << setw(6) << rank;
-        ofstream mesh_ofs2(mesh_name2.str());
-        mesh_ofs2.precision(8);
-        mesh->Print(mesh_ofs2);
+
+        ostringstream u_name; u_name << "fluid_velocity_verification_plot.gf" << "." << setfill('0') << setw(6) << rank;
+        ofstream u_ofs((mesh_output_dir + u_name.str()).c_str());
+        u_ofs.precision(8);
+        u_gf_save.Save(u_ofs);
+        ostringstream mesh_name; mesh_name << "fluid_velocity_verification_mesh.mesh" << "." << setfill('0') << setw(6) << rank;
+        ofstream mesh_ofs((mesh_output_dir + mesh_name.str()).c_str());
+        mesh_ofs.precision(8);
+        mesh->Print(mesh_ofs);
         exit(1);
         */
-        /*
-        // For debugging
-        //GridFunction u_gf_save(fluid_velocity_vgfc_manager->GetGridFunctionFES());
-        //u_gf_save = 0.0;
-        //u_gf_save.ProjectCoefficient(*fluid_velocity);
+        // ===============================
 
-        //int* partitioning2 = mesh_manager.GetPartitioning(); //fluid_velocity_vgfc_manager->GetGridFunctionMesh()->GeneratePartitioning(Mpi::WorldSize());
-        //ParMesh par_mesh_test(MPI_COMM_WORLD, *fluid_velocity_vgfc_manager->GetGridFunctionMesh(), partitioning2);
-        
-        //ParGridFunction kp; //(&par_mesh_test, &u_gf_save, partitioning2); // mesh_manager.GetPartitioning());
-        //kp = ParGridFunction(&par_mesh_test, &u_gf_save, partitioning2);
-        //kp.Save(("fluid_velocity_verification_plot" + to_string(rank) + ".gf").c_str());
-        
-        
-        //ostringstream mesh_name;
-        //mesh_name << mesh_output_file_name << "." << setfill('0') << setw(6) << rank;
-        //ofstream mesh_ofs(mesh_name.str());
-        //mesh_ofs.precision(8);
-        //fluid_velocity_vgfc_manager->GetGridFunctionMesh()->Print(mesh_ofs);
-        //ParMesh par_mesh_test(MPI_COMM_WORLD, *fluid_velocity_vgfc_manager->GetGridFunctionMesh(), mesh_manager.GetPartitioning());
-        //par_mesh_test.Print(mesh_ofs);
-        */
     }
     
 
@@ -426,8 +424,8 @@ int main(int argc, char *argv[])
     // Here, we are defining two marker arrays to mark 1.) the inlet, and 2.) the outlet.
     Array<int> marker_inlet_BC(mesh->bdr_attributes.Max()); // Define a marker array for the inlet BC
     marker_inlet_BC = 0; // Initialize marker array to "don't apply any essential BC"
-    marker_inlet_BC[(int)(*mesh_info["scalar_closure"])["inlet1"] - 1] = 1; // Set the first bdr attr group (i.e., physical group defined as 1 in gmsh file) as being the inlet
-    ParDirichlettBC *inlet_BC = new ParDirichlettBC(marker_inlet_BC);
+    for (int i_BCin = 0; i_BCin < inlet_PGs.size(); i_BCin++) { marker_inlet_BC[inlet_PGs[i_BCin] - 1] = 1; } // Set the first bdr attr group (i.e., physical group defined as 1 in gmsh file) as being the inlet
+    ParDirichlettBC *inlet_BC = new ParDirichlettBC(*fespace_c, marker_inlet_BC);
     inlet_BC->SetTemporallyDependentFunction( inlet_BC_func_T );
     inlet_BC->SetSpatiallyDependentFunction( inlet_BC_func_X );
 
@@ -524,9 +522,10 @@ int main(int argc, char *argv[])
     ParSaveManager saver(fespace_c, sol_BLK.GetBlock(0).Size(), rank);
     saver.SetPrefixAndSuffix(output_file_name_prefix, output_file_name_suffix);
     saver.SetOutputDir(output_dir);
+    saver.SetSerialMesh(&mesh_serial);
     
     // Save the initial condition in both parallel and serial formats
-    saver.Save(sol_BLK_true.GetBlock(0), mesh_serial);
+    saver.Save(sol_BLK_true.GetBlock(0));
 
     
     // Start the time loop
@@ -567,7 +566,7 @@ int main(int argc, char *argv[])
         // Save the solution if required
         if (i_step % output_interval == 0) {
             // Save the pore-scale solution in parallel and serial formats
-            saver.Save(sol_BLK_true.GetBlock(0), mesh_serial);
+            saver.Save(sol_BLK_true.GetBlock(0));
         }
 
 

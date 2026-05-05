@@ -1,4 +1,4 @@
-#lL.lH.
+# lL.lH.
 #
 # Copyright (c) 2025, Lawrence Livermore National Security, LLC
 # and other MoFA project developers. All Rights reserved.
@@ -9,7 +9,7 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 #
-#lL.lH.
+# lL.lH.
 
 ##########
 # Staged #
@@ -91,6 +91,9 @@ Solvers/Homogenization_Transport_Closure_Solver/
 #Solvers/Homogenization_Transport_Closure_Solver/build/*
 #!Solvers/Homogenization_Transport_Closure_Solver/build/.gitkeep
 
+Solvers/Adjoint_Transport_Closure_Solver/
+
+
 ##########################
 # Upscaled Model Solvers #
 ##########################
@@ -108,7 +111,8 @@ Solvers/Upscaled_Unsteady_Stokes_Solver/
 #Solvers/Upscaled_Unsteady_Stokes_Solver/build/*
 #!Solvers/Upscaled_Unsteady_Stokes_Solver/build/.gitkeep
 
-
+# Upscaled Transport Solver Periodic
+Solvers/Upscaled_Solver_Scalar/src/Upscaled_Transport_Solver_Periodic.cpp
 
 
 #########
@@ -146,3 +150,9 @@ Post_Processing/Residual_Calc/
 #Post_Processing/Residual_Calc/build/*
 #!Post_Processing/Residual_Calc/build/.gitkeep
 
+# Post Processing: Time Scale Analysis
+Post_Processing/Time_Scale_Analysis/
+#Post_Processing/Time_Scale_Analysis/bin/*
+#!Post_Processing/Time_Scale_Analysis/bin/.gitkeep
+#Post_Processing/Time_Scale_Analysis/build/*
+#!Post_Processing/Time_Scale_Analysis/build/.gitkeep

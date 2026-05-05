@@ -193,10 +193,6 @@ int main(int argc, char *argv[])
     // Ensure the element order of pressure is one less than that of the velocity
     if (p_order != u_order - 1) { p_order = u_order - 1; }
     
-    // Enable hardware devices, such as GPUs, and programming models like CUDA, OCCA, RAJA, and OpenMP
-    //Device device("cpu");
-    //if (Mpi::Root()) { device.Print(); }
-
     
     // ===============================================================
     //   Get the mesh and setup periodicity.
@@ -205,13 +201,20 @@ int main(int argc, char *argv[])
 
     // Get mesh info and load the necessary details
     JSONDict mesh_info; mesh_info.loadFromFile(mesh_info_dir + mesh_info_file_name);
+    
+    // Get the domain lengths, L
     globalVars.L = (*mesh_info["geometry"])["L"];
 
+    // Get the physical groups (or tags) for the inlet and no slip boundaries
+    vector<int> inlet_PGs = (*mesh_info["stokes"])["inlet1"];
+    vector<int> no_slip_PGs = (*mesh_info["stokes"])["noslip1"];
+
+    
     // Use the provided mesh file path to define the mesh 
     MeshManager mesh_manager(mesh_dir + mesh_file_name);
     
     // Make the mesh periodic if required by isPeriodic
-    mesh_manager.MakePeriodic(isPeriodic, globalVars.L);
+    mesh_manager.MakePeriodicMesh(isPeriodic, globalVars.L, true);
     
     // Make the parallel-partitioned mesh and use it
     mesh_manager.MakeParallelMesh(MPI_COMM_WORLD);
@@ -262,12 +265,17 @@ int main(int argc, char *argv[])
     // Here, we are defining two marker arrays to mark 1.) the inlet, and 2.) the surfaces where the no-slip BC is applied.
     Array<int> marker_inlet_BC(mesh->bdr_attributes.Max()); // Define a marker array for the inlet BC.
     marker_inlet_BC = 0; // Initialize marker array to "don't apply any essential BC".
-    if (useInlet == 1) { marker_inlet_BC[(int)(*mesh_info["stokes"])["inlet1"] - 1] = 1; } // Set the first bdr attr group (i.e., physical group defined as 1 in gmsh file) as being the inlet.
+    if (useInlet == 1) {
+        // Set the first bdr attr group (i.e., physical group defined as 1 in gmsh file) as being the inlet.
+        for (int i_BCin = 0; i_BCin < inlet_PGs.size(); i_BCin++) { marker_inlet_BC[inlet_PGs[i_BCin] - 1] = 1; }
+        //marker_inlet_BC[(int)(*mesh_info["stokes"])["inlet1"] - 1] = 1;
+    }
     VectorFunctionCoefficient inlet_BC(mesh->SpaceDimension(), u_inlet_func); // Define a function coefficient that will apply "u_inlet_func", which varies in space.
     
     Array<int> marker_no_slip_BC(mesh->bdr_attributes.Max()); // Define a marker array for the no-slip BC.
     marker_no_slip_BC = 0; // Initialize marker array to "don't apply any essential BC".
-    marker_no_slip_BC[(int)(*mesh_info["stokes"])["noslip1"] - 1] = 1; // Set the third bdr attr group (i.e., physical group defined as 3 in gmsh file) as being the no-slip condition.
+    for (int i_BCns = 0; i_BCns < no_slip_PGs.size(); i_BCns++) { marker_no_slip_BC[no_slip_PGs[i_BCns] - 1] = 1; } // Set the third bdr attr group (i.e., physical group defined as 3 in gmsh file) as being the no-slip condition.
+    //marker_no_slip_BC[(int)(*mesh_info["stokes"])["noslip1"] - 1] = 1;
     VectorFunctionCoefficient no_slip_BC(mesh->SpaceDimension(), u_no_slip_func); // Define a function coefficient that will apply "u_inlet_func", which varies in space.
 
     if (rank == 0) { cout << "Complete." << endl; }
@@ -318,10 +326,10 @@ int main(int argc, char *argv[])
     VectorConstantCoefficient body_force(body_force_vec);
     varf_body_forc.AddDomainIntegrator(new VectorDomainLFIntegrator(body_force));
     varf_body_forc.Assemble();
-    //b_BLK_true.GetBlock(0) += *varf_force.ParallelAssemble(); // use this instead of  b_BLK.GetBlock(0) = varf_body_forc
+    b_BLK_true.GetBlock(0) += *varf_body_forc.ParallelAssemble(); // use this instead of  b_BLK.GetBlock(0) = varf_body_forc
     
     // Set the RHS blocks using the linear form
-    b_BLK.GetBlock(0) = varf_body_forc;
+    //b_BLK.GetBlock(0) = varf_body_forc;
 
     if (rank == 0) { cout << "Complete." << endl; }
         
@@ -364,8 +372,8 @@ int main(int argc, char *argv[])
     // As such, move the solution and b vectors to the corresponding true vdofs vectors, and continue using true vdofs (hypre uses true vdofs)
     fespace_u->GetRestrictionMatrix()->Mult(sol_up_BLK.GetBlock(0), sol_up_BLK_true.GetBlock(0));
     fespace_p->GetRestrictionMatrix()->Mult(sol_up_BLK.GetBlock(1), sol_up_BLK_true.GetBlock(1));
-    fespace_u->GetRestrictionMatrix()->Mult(b_BLK.GetBlock(0), b_BLK_true.GetBlock(0));
-    fespace_p->GetRestrictionMatrix()->Mult(b_BLK.GetBlock(1), b_BLK_true.GetBlock(1));
+    //fespace_u->GetRestrictionMatrix()->Mult(b_BLK.GetBlock(0), b_BLK_true.GetBlock(0));
+    //fespace_p->GetRestrictionMatrix()->Mult(b_BLK.GetBlock(1), b_BLK_true.GetBlock(1));
 
     
     // Apply the inlet BC to both bilinear forms
@@ -374,8 +382,9 @@ int main(int argc, char *argv[])
         HypreParMatrix *M_viscous_BC_elim = varf_viscous.ParallelEliminateEssentialBC(marker_inlet_BC, *M_viscous); // separate-out the rows and columns (into M_viscous_BC_elim) of M_viscous that correspond to the true vdofs at the inlet
         Vector b_BLK0_dummy(b_BLK_true.GetBlock(0).Size()); b_BLK0_dummy = 0.0;
         Array<int> tdof_list; fespace_u->GetEssentialTrueDofs(marker_inlet_BC, tdof_list); // get the true vdofs at the inlet
-        EliminateBC(*M_viscous, *M_viscous_BC_elim, tdof_list, sol_up_BLK_true.GetBlock(0), b_BLK0_dummy); // move the contributions of the true vdofs at the inlet into the b vector
-        b_BLK_true.GetBlock(0) += b_BLK0_dummy;
+        EliminateBC(*M_viscous, *M_viscous_BC_elim, tdof_list, sol_up_BLK_true.GetBlock(0), b_BLK0_dummy); // get the contributions of the inlet true vdofs to the b vector
+        for (int i = 0; i < tdof_list.Size(); i++) { b_BLK_true.GetBlock(0)[tdof_list[i]] = b_BLK0_dummy[tdof_list[i]]; b_BLK0_dummy[tdof_list[i]] = 0.0; } // Reassign the "true-vdof" components of the b vector, as the associated discretized equations should resemble the inlet boundary condition (i.e., there shouldn't be any other contributions to the b vector (like body forces) in these components)
+        for (int i = 0; i < b_BLK0_dummy.Size(); i++) { if (b_BLK0_dummy[i] != 0.0) { b_BLK_true.GetBlock(0)[i] += b_BLK0_dummy[i]; } } // There are other contributions besides the "true-vdof" components. We still need to add these to the b vector, and do so here
         delete M_viscous_BC_elim;
         
         HypreParMatrix *M_incomp_col_elim = M_incomp->EliminateCols(tdof_list); // separate-out the columns (into M_incomp_col_elim) of M_incomp that correspond to the true vdofs at the inlet
@@ -388,9 +397,10 @@ int main(int argc, char *argv[])
     // Apply no slip to varf_viscous
     HypreParMatrix *M_viscous_NS_elim = varf_viscous.ParallelEliminateEssentialBC(marker_no_slip_BC, *M_viscous); // separate-out the rows and columns (into M_viscous_BC_elim) of M_viscous that correspond to the true vdofs at the inlet
     Vector b_BLK0_dummy(b_BLK_true.GetBlock(0).Size()); b_BLK0_dummy = 0.0;
-    Array<int> tdof_list; fespace_u->GetEssentialTrueDofs(marker_no_slip_BC, tdof_list); // get the true vdofs at the inlet
-    EliminateBC(*M_viscous, *M_viscous_NS_elim, tdof_list, sol_up_BLK_true.GetBlock(0), b_BLK0_dummy); // move the contributions of the true vdofs at the inlet into the b vector
-    b_BLK_true.GetBlock(0) += b_BLK0_dummy;
+    Array<int> tdof_list; fespace_u->GetEssentialTrueDofs(marker_no_slip_BC, tdof_list); // get the true vdofs on the no-slip surfaces
+    EliminateBC(*M_viscous, *M_viscous_NS_elim, tdof_list, sol_up_BLK_true.GetBlock(0), b_BLK0_dummy); // move the contributions of the true vdofs on the no-slip surfaces into the b vector
+    for (int i = 0; i < tdof_list.Size(); i++) { b_BLK_true.GetBlock(0)[tdof_list[i]] = b_BLK0_dummy[tdof_list[i]]; b_BLK0_dummy[tdof_list[i]] = 0.0; }  // Reassign the "true-vdof" components of the b vector, as the associated discretized equations should resemble the no-slip boundary condition (i.e., there shouldn't be any other contributions to the b vector (like body forces) in these components)
+    for (int i = 0; i < b_BLK0_dummy.Size(); i++) { if (b_BLK0_dummy[i] != 0.0) { b_BLK_true.GetBlock(0)[i] += b_BLK0_dummy[i]; } } // There are other contributions besides the "true-vdof" components. We still need to add these to the b vector, and do so here
     delete M_viscous_NS_elim;
 
     HypreParMatrix *M_incomp_col_elim = M_incomp->EliminateCols(tdof_list); // separate-out the columns (into M_incomp_col_elim) of M_incomp that correspond to the true vdofs at the inlet
@@ -516,22 +526,26 @@ int main(int argc, char *argv[])
         ofstream mesh_ofs((output_dir + mesh_name.str()).c_str());
         mesh_ofs.precision(8);
         mesh->Print(mesh_ofs);
-        // Have rank 0 also save the entire serial/global mesh for 
-        Mesh mesh_serial = mesh->GetSerialMesh(0);
+
+        // Have rank 0 also save the entire serial/global mesh. This will be saved on a non-periodic mesh, which was created in the background of the mesh manager
+        //Mesh mesh_serial = mesh->GetSerialMesh(0);
+        Mesh mesh_serial = mesh_manager.GetParentParMesh()->GetSerialMesh(0);
         if (rank == 0) {
             ofstream mesh_out((output_dir + mesh_output_file_name).c_str()); //+ ".serial").c_str());
+            mesh_out.precision(8);
             mesh_serial.Print(mesh_out);
         }
-
+        
         // Save the velocity as a vector field
         ofstream u_ofs((output_dir + u_name.str()).c_str());
         u_ofs.precision(8);
         u_sol.Save(u_ofs);
         // Have rank 0 also save the entire serial/global velocity solution as one gridfunction 
-        ofstream u_ofs_asone((output_dir + u_output_file_name).c_str()); //+ ".serial").c_str());
         GridFunction u_sol_serial = u_sol.GetSerialGridFunction(0, mesh_serial);
+        ofstream u_ofs_asone((output_dir + u_output_file_name).c_str()); //+ ".serial").c_str());
+        u_ofs_asone.precision(8);
         u_sol_serial.Save(u_ofs_asone);
-        
+
         // Save the pressure field
         ofstream p_ofs((output_dir + p_name.str()).c_str());
         p_ofs.precision(8);

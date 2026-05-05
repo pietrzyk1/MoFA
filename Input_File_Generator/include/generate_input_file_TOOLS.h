@@ -28,7 +28,8 @@ istringstream createMeshDict(const string &project_dir, const string mesh_file_n
     const double epsilon, const vector<int> N_AR, const vector<double> L, const vector<double> ell,
     const int merge_ARs, const double min_area_thresh, const double max_AR_length, const double max_AR_length_ratio,
     const string geo_dir, const string geo_file_name, const double geo_scale,
-    const vector<vector<int>> pg_cut_inds, const vector<string> pg_cut_names)
+    const vector<vector<int>> pg_cut_inds, const vector<string> pg_cut_names,
+    const vector<int> N_macroDomains = {1, 1, 1})
 {
     JSONDict meshDict;
 
@@ -36,6 +37,11 @@ istringstream createMeshDict(const string &project_dir, const string mesh_file_n
     meshDict_output["directory"] = project_dir + "mesh/"; // The mesh output directory 
     meshDict_output["file name"] = mesh_file_name + ".msh"; // The mesh file name
     meshDict["output path"] = &meshDict_output;
+
+    JSONDict meshDict_output_geo;
+    meshDict_output_geo["directory"] = project_dir + "mesh/"; // The output geometry directory 
+    meshDict_output_geo["file name"] = mesh_file_name + ".geo_unrolled"; // The output geometry file name
+    meshDict["output geo path"] = &meshDict_output_geo;
 
     JSONDict meshDict_info;
     meshDict_info["directory"] = meshDict_output["directory"]; // The mesh info output directory
@@ -88,6 +94,12 @@ istringstream createMeshDict(const string &project_dir, const string mesh_file_n
     if (pg_cut_names.size() != 0) { meshDict_cutPhysicalGroups["physical group cut names"] = pg_cut_names; }
     if (pg_cut_inds.size() != 0) { meshDict_cutPhysicalGroups["physical group cut indices"] = pg_cut_inds; }
     meshDict["cut physical groups"] = &meshDict_cutPhysicalGroups;
+
+    JSONDict meshDict_juxtaposedUnitCells;
+    meshDict_juxtaposedUnitCells["N_macroDomains"] = N_macroDomains; // The numbers of unit-cells to be copied and contiguously placed in each direction
+    meshDict_juxtaposedUnitCells["directory"] = project_dir + "mesh/"; // The periodic mesh output directory 
+    meshDict_juxtaposedUnitCells["file name"] = mesh_file_name + "_periodic.msh"; // The periodic mesh file name
+    meshDict["juxtaposed unit-cells info"] = &meshDict_juxtaposedUnitCells;
 
     return meshDict.saveToStream();
 }
@@ -149,7 +161,7 @@ istringstream createTransportClosureDict(const string &project_dir,
     const int useLocalMesh, const int N_neighbor_layers, const int saveLocalMesh,
     const double resAvg_alpha, const double resAvg_beta, const double resAvg_gamma,
     const int max_iter, const double rel_tol, const double abs_tol,
-    const int importFluidMesh = 0, const int maxRecursionIter = 2)
+    const int importFluidMesh = 0, const int active_adjoint = 0, const int maxRecursionIter = 2)
 {
     JSONDict closureDict;
 
@@ -160,6 +172,7 @@ istringstream createTransportClosureDict(const string &project_dir,
     closureDict_sim["use inlet"] = useInlet; // Define whether to solve the closure problems associated with the inlet condition at the inlet marked in the mesh. 0 = No, 1 = Yes (the answer is "no" for periodic BC; "yes" for Dirichlet BC)
     closureDict_sim["use reactions"] = useReactions; // Define whether to solve the closure problems associated with the reaction surfaces defined and marked in the mesh. 0 = No, 1 = Yes
     closureDict_sim["import fluid mesh"] = importFluidMesh; // Define whether the solver should import the mesh used for solving the Stokes problem (for fluid velocity) or use the mesh create from gmsh. 0 = use gmsh mesh, 1 = use MFEM mesh saved with the fluid velocity solution
+    closureDict_sim["active adjoint"] = active_adjoint; // Toggle for using the adjoint closure equations. 0 = use regular closure equaitons, 1 = use adjoint closure equations
     closureDict["simulation parameters"] = &closureDict_sim;
 
     JSONDict closureDict_res;
@@ -193,7 +206,9 @@ istringstream createTransportClosureDict(const string &project_dir,
     closureDict_solver["abs tol"] = abs_tol; // The absolute tolerance for the solver
     closureDict["solver parameters"] = &closureDict_solver;
 
-    string closureDict_sol_dir = project_dir + "output/scalar_closure_solution/";
+    string closureDict_sol_dir;
+    if (active_adjoint == 0) { closureDict_sol_dir = project_dir + "output/scalar_closure_solution/"; }
+    else { closureDict_sol_dir = project_dir + "output/adjoint_transport_closure_solution/"; }
     
     JSONDict closureDict_residual;
     closureDict_residual["directory"] = closureDict_sol_dir + "closure_residual/"; // The closure residual output directory
@@ -218,6 +233,13 @@ istringstream createTransportClosureDict(const string &project_dir,
     closureDict_forcing["directory"] = closureDict_sol_dir + "closure_solution/"; // The applied forcing function directory
     closureDict_forcing["file name"] = "None"; // The applied forcing function file name
     closureDict["forcing function path"] = &closureDict_forcing;
+
+    JSONDict closureDict_residual_calc;
+    closureDict_residual_calc["adjoint directory"] = project_dir + "output/adjoint_transport_closure_solution/" + "closure_residual/"; // The adjoint residual directory
+    closureDict_residual_calc["file name prefix"] = "a_sol"; // The prefix of the closure residual file name
+    closureDict_residual_calc["file name suffix"] = ".txt"; // The suffix fo the closure residual file name
+    closureDict_residual_calc["output directory"] = project_dir + "output/scalar_closure_solution/" + "closure_residual/"; // The calculated residual output directory
+    closureDict["residual calc path"] = &closureDict_residual_calc;
 
     return closureDict.saveToStream();
 }

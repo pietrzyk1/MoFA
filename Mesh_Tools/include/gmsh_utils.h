@@ -210,6 +210,17 @@ int getPhysicalGroup(int &physGroupTag, const string side, const int dim, std::v
 //      bottom_tags: the group of line tags describing the bottom of the domain
 //      left_tags: the group of line tags describing the left of the domain
 
+int getPhysicalGroups(std::vector<int> &PGs, const string &side, const int dim, std::vector<int> &top_tags,
+    std::vector<int> &right_tags, std::vector<int> &bottom_tags, std::vector<int> &left_tags);
+// Here:
+//      PGs: the physical group tags created with the tags of domain boundary "side"
+//      side: a string that tells which side of the domain will have its set of tags turned into physical groups
+//      dim: the dimension of the geometric entity (i.e., 1 for lines (2D), 2 for surfaces (3D))
+//      top_tags: the group of line tags describing the top of the domain
+//      right_tags: the group of line tags describing the right of the domain
+//      bottom_tags: the group of line tags describing the bottom of the domain
+//      left_tags: the group of line tags describing the left of the domain
+
 
 
 
@@ -382,3 +393,57 @@ void getDomainBoundarySurfaceTags(const std::vector<std::vector<int>> &surf_tags
 //      ARs: a vector gmsh formatted AR surface tags. They have the form {{dim, tag}, ...}
 //      AR_tags_neighbors: a nested vector of AR inds that touch the top, bottom, left, and right domain boundaries. First level = top, bottom, left, and right; second level = AR inds
 //      L = {L_x, L_y, L_z}: the length of the domain in each direction
+
+
+
+
+
+void getNeighboringARTags(const std::vector<std::vector<int>> &AR_tags_toBeMerged,
+    const std::vector<int> &AR_tags, std::vector<std::vector<int>> &AR_neighbors, int is3D);
+void getNeighboringARTags(const std::vector<std::vector<int>> &AR_tags_toBeMerged, const std::vector<int> &AR_PGs,
+    std::vector<std::vector<int>> &AR_PG_neighbors, std::vector<std::vector<int>> &AR_PG_neighbor_macroIDs,
+    int is3D, const std::vector<std::vector<int>> &boundary_AR_PGs, const std::vector<int> &isPeriodic,
+    const std::vector<double> &L);
+// Here:
+//      AR_tags_toBeMerged: a nested vector of AR tags (i.e., gmsh surface/volume tags) to be merged (i.e., {{1}, {2,3}, {4,6}, {5}, ...})
+//      AR_PGs: a vector of the AR physical group tags (which define merged AR volume tags)
+//      AR_PG_neighbors: a nested vector of the neighboring AR physical group tags for each AR. The order of the outer list corresponds to the order of AR_tags
+//      AR_PG_neighbor_macroIDs: a nested vector of the macro IDs of neighboring AR physical group tags for each AR. The order of the outer list corresponds to the order of AR_tags
+//      is3D: 0 for 2D, 1 for 3D
+//      boundary_AR_PGs: a nested vector of the AR physical group tags that touch each domain boundary. (i.e., {{AR touching top, AR touching right, AR touching bottom, AR touching left}})
+//      isPeriodic: a vector that tells whether periodicity should be enforced in each direction. 0 for not periodic, 1 for periodic
+//      L = {L_x, L_y, L_z}: the length of the domain in each direction
+
+void getPointTagsFromEntity(const std::vector<std::vector<int>> &AR_tags_toBeMerged, std::vector<std::vector<int>> &AR_PG_gpts, int is3D);
+
+
+void getMacroIDToCoords(std::vector<std::vector<int>> &macroID_to_coords);
+int getMacroID(std::vector<int> periodic_dims, const std::vector<double> &trans_coords);
+
+
+
+
+
+
+
+//void CopyAndTranslatePGGeometry(const std::vector<int> &AR_PGs, const std::vector<double> &translation, std::vector<int> &new_AR_PGs, int dim, bool useOCC = false);
+// Here:
+//      AR_PGs: a vector of the AR physical group tags (which define merged AR volume tags; in the main code, this might be AR_tags)
+//      translation: a vector of the translation to apply to the copied geomtry
+//      new_AR_PGs: a vector of the new physical group tags for the ARs created
+//      dim: 0 for points, 1 for lines, 2 for surfaces, or 3 for volumes
+//      useOCC: toggle for using copy and translate functions from gmsh::model::occ vs. gmsh::model::geo
+void CopyAndTranslatePGGeometry(const std::vector<int> &AR_PGs, const std::vector<double> &translation, std::vector<int> &new_AR_PGs, int dim, bool useOCC = false);
+// Here:
+//      AR_PGs: a vector of the AR physical group tags (which define merged AR volume tags; in the main code, this might be AR_tags)
+//      translation: a vector of the translation to apply to the copied geomtry
+//      new_AR_PGs: a vector of the new physical group tags for the ARs created
+//      dim: 0 for points, 1 for lines, 2 for surfaces, or 3 for volumes
+//      useOCC: toggle for using copy and translate functions from gmsh::model::occ vs. gmsh::model::geo
+void CopyAndTranslatePGGeometry(const std::vector<int> &AR_PGs, const std::vector<double> &translation, int &new_AR_PG, int dim, bool useOCC = false);
+// Here:
+//      AR_PGs: a vector of the AR physical group tags (which define merged AR volume tags; in the main code, this might be AR_tags)
+//      translation: a vector of the translation to apply to the copied geomtry
+//      new_AR_PG: the new physical group tag for the physical groups created
+//      dim: 0 for points, 1 for lines, 2 for surfaces, or 3 for volumes
+//      useOCC: toggle for using copy and translate functions from gmsh::model::occ vs. gmsh::model::geo

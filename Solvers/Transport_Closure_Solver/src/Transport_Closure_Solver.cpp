@@ -46,13 +46,14 @@ public:
     GeneralizedResidualManager(double alpha_, double beta_, double gamma_);
     void SetParams(double alpha_, double beta_, double gamma_);
     constexpr void ConstructParamVecs(int N_AR_global, const vector<int> &AR_inds_loc2glob) {};
+    constexpr void ConstructParamVecs(int N_AR_global, const vector<int> &AR_inds_loc2glob, bool test) {};
     constexpr void ImplementAlpha(BilinearForm *&varf) {};
     constexpr void ImplementBeta(SparseMatrix &cavg) {};
     constexpr void ImplementGamma(SparseMatrix &BM_avgavg, const vector<int> &AR_inds_loc2glob) {};
     void AlterGammaVec(const vector<int> &AR_tags, const vector<vector<int>> &AR_neighbors, int active_AR_global, int procedureID = -1);
     static constexpr vector<double>* GetParamVec(const char* param_name) { return nullptr; };
     bool LoadParamDicts(JSONDict &eq_dict);
-    void ImplementGeneralizedResidual(vector<double> &temp, vector<string> keys, bool isKMat = false);
+    void ImplementGeneralizedResidual(vector<double> &temp, vector<string> keys, int N_AR, bool isKMat = false);
     void CreateTransform(JSONDict &closure_residuals_dict, vector<double> &porosities, int N_AR, double epsilon, double omega);
     void ModifyTransform(vector<double> &temp, vector<string> keys, bool addOne = false);
     void ApplyTransform(vector<vector<double>> &avg_sol, const Vector &temp_sols, int N_AR, double fip1, double fi, double dt);
@@ -67,6 +68,59 @@ public:
 
 using namespace std;
 using namespace mfem;
+
+
+
+
+class NormalDotVelocityCoefficient : public Coefficient
+{
+private:
+    VectorCoefficient &u_;
+
+public:
+    NormalDotVelocityCoefficient(VectorCoefficient &u) : u_(u) { }
+
+    double Eval(ElementTransformation &T,
+                const IntegrationPoint &ip) override
+    {
+        // Evaluate the vector
+        Vector uval_;
+        u_.Eval(uval_, T, ip);
+        
+        // Compute physical normal from face Jacobian
+        Vector n_(u_.GetVDim());
+        mfem::CalcOrtho(T.Jacobian(), n_);
+        
+        // Normalize for unit normal
+        const double nn = n_.Norml2();
+        if (nn > 0.0) { n_ /= nn; }
+
+        // Return vector dot normal
+        return uval_ * n_;
+    }
+};
+
+class NegativeVectorCoefficient : public VectorCoefficient
+{
+private:
+    VectorGridFunctionCoefficient &u_;
+
+public:
+    // Inherit the constructors
+    using VectorCoefficient::VectorCoefficient;
+    
+    // Define the class constructors
+    NegativeVectorCoefficient(VectorGridFunctionCoefficient &u) : VectorCoefficient(u.GetVDim()), u_(u) { }
+
+    void Eval(Vector &V, ElementTransformation &T, const IntegrationPoint &ip) override
+    {
+        // Evaluate the vector
+        u_.Eval(V, T, ip);
+        // Make it negative
+        V *= -1.0;
+    }
+};
+
 
 
 
@@ -115,6 +169,7 @@ int main(int argc, char *argv[])
     int active_inlet = 0;
     vector<int> active_reactions;
     int active_reaction = -2;
+    int active_adjoint = 0;
 
     // Physical equation parameters
     double Pe_s = 1.0;
@@ -229,6 +284,7 @@ int main(int argc, char *argv[])
         sub_dict.getValue("use inlet", useInlet);
         sub_dict.getValue("use reactions", useReactions);
         sub_dict.getValue("import fluid mesh", importFluidMesh);
+        sub_dict.getValue("active adjoint", active_adjoint);
         
         sub_dict = *closure_dict["residual parameters"];
         sub_dict.getValue("resAvg_alpha", resAvg_alpha);
@@ -317,6 +373,7 @@ int main(int argc, char *argv[])
     args.AddOption(&recursive_iter, "-I", "--recursive_iter", "Provide the int that describes the iteration of this run.");
     args.AddOption(&save_mesh, "-s", "--save_mesh", "Toggle whether to save the mesh or not. 0 = No, 1 = Yes.");
     args.AddOption(&solve_mode, "-S", "--solve_mode", "Define how the code is being run. Options: 'serial' or 'ensemble' (i.e., closure problems are being solved as an ensamble in parallel)");
+    args.AddOption(&active_adjoint, "-j", "--active_adjoint", "Toggle whether the adjoint closure problem will be solved. 0 = No, 1 = Yes.");
     args.ParseCheck();
 
     
@@ -353,6 +410,10 @@ int main(int argc, char *argv[])
         gen_res_manager.SetParams(resAvg_alpha, resAvg_beta, resAvg_gamma);
     }
     
+    // Define whether the simulation is periodic in at least one direction
+    bool meshIsPeriodic = false;
+    for (int i_prdc = 0; i_prdc < isPeriodic.size(); i_prdc++) { if (isPeriodic[i_prdc] == 1) { meshIsPeriodic = true; break; } }
+    
     
     // ===============================================================
     //   Create a log file (if ensemble solving, output to cout because each thread is obtaining the cout of this code)
@@ -377,30 +438,38 @@ int main(int argc, char *argv[])
     // Get "global" mesh info from the mesh info file (this is information about the full/parent/global mesh)
     JSONDict mesh_info; mesh_info.loadFromFile(mesh_info_file_path);
     globalVars.L = (*mesh_info["geometry"])["L"];
-    int N_AR_global = (int)(*mesh_info["AR"])["total_number"]; // Get the number of averaging regions defined in the mesh file
-    vector<int> AR_tags = (*mesh_info["AR"])["tags"];
-    vector<vector<int>> AR_neighbors = (*mesh_info["AR"])["neighbors"];
+
+    JSONDict AR_dict = *mesh_info["AR"];
+    int N_AR_global = (int)(AR_dict["total_number"]); // Get the number of averaging regions defined in the mesh file
+    vector<int> AR_tags = AR_dict["tags"];
+    vector<vector<int>> AR_neighbors = AR_dict["neighbors"];
+    vector<vector<int>> AR_neighbor_macroIDs; AR_dict.getValue("neighbor macroIDs", AR_neighbor_macroIDs);
+    vector<vector<int>> macroIDCoordsKey; AR_dict.getValue("macroID-coords key", macroIDCoordsKey);
     
+
     // Define additional variables using the global mesh information
     int N_AR = N_AR_global;
     int active_AR_global = active_AR;
-    vector<int> AR_inds_loc2glob; for (int i = 0; i < N_AR_global; i++) { AR_inds_loc2glob.push_back( i ); }
-    
-    
+    vector<int> AR_inds_loc2glob(N_AR_global); for (int i = 0; i < N_AR_global; i++) { AR_inds_loc2glob[i] = i; }
+    vector<int> AR_macroIDs; // Would need an additional method for definition while using a non-local mesh
+
     // Use the provided mesh file to define the mesh 
     MeshManager mesh_manager(mesh_file_path);
     
     // Make the mesh periodic if required by isPeriodic
-    mesh_manager.MakePeriodic(isPeriodic, globalVars.L);
+    mesh_manager.MakePeriodicMesh(isPeriodic, globalVars.L, true);
     
     // Make a local mesh around active_AR/the inlet, if called for by useLocalMesh
     if (useLocalMesh == 1) {
         // Make the local mesh
         if (active_inlet == 1) {
             vector<int> inlet_AR_neighbors = (*mesh_info["scalar_closure"])["inlet1 AR neighbors"]; for (int i = 0; i < inlet_AR_neighbors.size(); i++) { inlet_AR_neighbors[i] -= 1; }
-            mesh_manager.MakeLocalMesh(inlet_AR_neighbors, N_neighbor_layers, AR_tags, AR_neighbors);
-        } else {
-            mesh_manager.MakeLocalMesh({active_AR}, N_neighbor_layers, AR_tags, AR_neighbors);
+            if (meshIsPeriodic) { mesh_manager.MakeLocalMesh(inlet_AR_neighbors, N_neighbor_layers, AR_tags, AR_neighbors, AR_neighbor_macroIDs, macroIDCoordsKey, isPeriodic); }
+            else { mesh_manager.MakeLocalMesh(inlet_AR_neighbors, N_neighbor_layers, AR_tags, AR_neighbors); }
+        }
+        else {
+            if (meshIsPeriodic) { mesh_manager.MakeLocalMesh({active_AR}, N_neighbor_layers, AR_tags, AR_neighbors, AR_neighbor_macroIDs, macroIDCoordsKey, isPeriodic); }
+            else { mesh_manager.MakeLocalMesh({active_AR}, N_neighbor_layers, AR_tags, AR_neighbors); }
             active_AR = mesh_manager.get_central_AR_inds_local()[0];
         }
         // Reassign variable "mesh" to the local mesh
@@ -411,6 +480,7 @@ int main(int argc, char *argv[])
         N_AR = mesh_manager.get_N_AR_local();
         AR_tags = mesh_manager.get_AR_kept();
         AR_inds_loc2glob = mesh_manager.get_AR_inds_loc2glob();
+        AR_macroIDs = mesh_manager.get_AR_macroIDs();
     }
 
     // Get a pointer to the mesh being used
@@ -419,7 +489,31 @@ int main(int argc, char *argv[])
     cout << "Complete." << endl;
     cout << globalVars.FILENAME << ":   Total number of averaging regions: " << N_AR_global << endl;
     cout << globalVars.FILENAME << ":   Number of averaging regions considered in closure problem: " << N_AR << endl;
-    
+
+
+
+    // There is currently no adjoint problem for an inlet force (i.e., Dirichlet BC = 1). Therefore, just save the
+    // AR_inds and macro IDs in the residuals file, as they are used in the conversion of adjoint residuals to
+    // generalized residuals
+    if (active_adjoint == 1 && active_inlet == 1) {
+        // Define the sim_key and AR_number
+        string sim_key = "inlet"; string AR_number = "0";
+        
+        // Create the saver for the residuals and save them to the text file
+        ResultsSaver Saver;
+        Saver.SetSolveMode(solve_mode);
+        Saver.SetVariables(sim_key, recursive_iter, {"transport eq"}, {closure_output_file_name}, AR_number);
+        Saver.InitializeJSONDicts_EqLevel({1});
+        
+        Saver.StoreResidualParameters("AR_inds", {{AR_inds_loc2glob}});
+        if (AR_macroIDs.size() > 0) { Saver.StoreResidualParameters("AR_macroIDs", {{AR_macroIDs}}); }
+        
+        Saver.SaveResidualDictionary(residual_output_file_path);
+
+        return 0;
+    }
+
+
 
     // ===============================================================
     //   Define finite element spaces for the concentration.
@@ -451,11 +545,11 @@ int main(int argc, char *argv[])
         cout << globalVars.FILENAME << ":   Loading fluid velocity... ";
         fluid_velocity_vgfc_manager = std::make_unique<VectorGridFunctionCoefficientManager>(fluid_velocity_file_path, fluid_velocity_mesh_file_path, Pe_s);
         cout << "Complete." << endl;
-        
+
         // Create the local fluid velocity grid function if necessary
         if (useLocalMesh == 1) {
             cout << globalVars.FILENAME << ":   Obtaining the local fluid velocity... ";
-            fluid_velocity_vgfc_manager->MakeLocalGridFunction(mesh_manager.GetLocalMesh());
+            fluid_velocity_vgfc_manager->MakeLocalGridFunction(mesh_manager.GetLocalMesh()); // Local mesh (i.e., the submesh) is needed to make the TransferMap
             fluid_velocity_vgfc_manager->UseLocalGridFunction();
             cout << "Complete." << endl;
         }
@@ -466,20 +560,27 @@ int main(int argc, char *argv[])
         fluid_velocity = fluid_velocity_vgfc_manager->GetVectorGridFunctionCoefficient();
         cout << "Complete." << endl;
 
-        // If the program is running in serial, save the fluid velocity gridfunction to make sure it loaded properly
-        if (solve_mode == "serial") { // TODO: Encode this in GridFunctionManager
-            //FiniteElementCollection *fec_u_save = new H1_FECollection(order, mesh->Dimension());
-            //FiniteElementSpace *fespace_u_save = new FiniteElementSpace(mesh, fec_u_save, mesh->Dimension());
-            //GridFunction u_gf_save(fespace_u_save);
-            //u_gf_save.ProjectCoefficient(fluid_velocity);
-            //u_gf_save.Save((*mesh_output_dir + "fluid_velocity_verification_plot.gf").c_str());
-            
-            //FiniteElementSpace *fespace_u_save = new FiniteElementSpace(mesh, fec_c, mesh->Dimension());
-            //GridFunction u_gf_save(fespace_u_save);
-            //u_gf_save.ProjectCoefficient(*fluid_velocity);
-            //u_gf_save.Save((mesh_output_dir + "fluid_velocity_verification_plot.gf").c_str());
-            //mesh->Save(mesh_output_dir + "closure_mesh.mesh");
-        }
+
+        
+        // ======== For Debugging ========
+        /*
+        //Mesh *mesh2 = fluid_velocity_vgfc_manager->GetGridFunctionMesh();
+        FiniteElementCollection *fec_u_save = new H1_FECollection(2, mesh->Dimension());
+        FiniteElementSpace *fespace_u_save = new FiniteElementSpace(mesh, fec_u_save, mesh->Dimension());
+        GridFunction u_gf_save(fespace_u_save);
+
+        //u_gf_save.ProjectGridFunction(*fluid_velocity_vgfc_manager->GetGridFunction());
+        u_gf_save.ProjectCoefficient(*fluid_velocity);
+
+        u_gf_save.Save((mesh_output_dir + "fluid_velocity_verification_plot.gf").c_str());
+        
+        ostringstream mesh_name; mesh_name << "fluid_velocity_verification_mesh.mesh";
+        ofstream mesh_ofs((mesh_output_dir + mesh_name.str()).c_str());
+        mesh_ofs.precision(8);
+        mesh->Print(mesh_ofs);
+        exit(1);
+        */
+        // ===============================
     }
 
     
@@ -506,6 +607,27 @@ int main(int argc, char *argv[])
         forcing_function = forcing_function_gfc_manager->GetGridFunctionCoefficient();
         cout << "Complete." << endl;
         //forcing_function_gfc_manager->GetGridFunction()->Save("TESTING_GF.gf");
+
+
+
+        // ======== For Debugging ========
+        //FiniteElementCollection *fec_u_save = new H1_FECollection(2, mesh->Dimension());
+        //FiniteElementSpace *fespace_u_save = new FiniteElementSpace(mesh, fec_u_save, 1);
+        //GridFunction u_gf_save(fespace_u_save);
+
+        //u_gf_save.ProjectGridFunction(*forcing_function_gfc_manager->GetGridFunction());
+        //u_gf_save.ProjectCoefficient(*forcing_function);
+
+        //u_gf_save.Save((mesh_output_dir + "fluid_velocity_verification_plot.gf").c_str());
+        //mesh->Save(mesh_output_dir + "closure_mesh.mesh");
+        //exit(1);
+
+        //ostringstream mesh_name; mesh_name << "closure_mesh.mesh";
+        //ofstream mesh_ofs((mesh_output_dir + mesh_name.str()).c_str());
+        //mesh_ofs.precision(8);
+        //mesh->Print(mesh_ofs);
+        //exit(1);
+        // ===============================
     }
 
     
@@ -559,20 +681,23 @@ int main(int argc, char *argv[])
     cout << globalVars.FILENAME << ":   Defining boundary condition functions... ";
     
     // Here, we are defining two marker arrays to mark 1.) the inlet, and 2.) the outlet.
-    
     Array<int> marker_inlet_BC; //(mesh->bdr_attributes.Max()); // Define a marker array for the inlet BC
-    int BC_toggle;
-    marker_inlet_BC.SetSize(mesh->bdr_attributes.Max());
-    marker_inlet_BC = 0; // Initialize marker array to "don't apply any essential BC"
-    if (useInlet == 1) { marker_inlet_BC[(int)(*mesh_info["scalar_closure"])["inlet1"] - 1] = 1; } // Set the bdr attr group for the inlet to 1
-    if (active_inlet == 1 && forcing_function_file_name == "None") { BC_toggle = 1; } else { BC_toggle = 0; }
+    marker_inlet_BC.SetSize(mesh->bdr_attributes.Max()); marker_inlet_BC = 0; // Initialize marker array to "don't apply any essential BC"
+    vector<int> inlet_PGs = (*mesh_info["scalar_closure"])["inlet1"];
+    if (useInlet == 1) {
+        for (int i_BCin = 0; i_BCin < inlet_PGs.size(); i_BCin++) { marker_inlet_BC[inlet_PGs[i_BCin] - 1] = 1; } // Set the bdr attr group for the inlet to 1
+        //marker_inlet_BC[(int)(*mesh_info["scalar_closure"])["inlet1"] - 1] = 1;
+    }
+    int BC_toggle; if (active_inlet == 1 && forcing_function_file_name == "None") { BC_toggle = 1; } else { BC_toggle = 0; }
     FunctionCoefficient inlet_BC( [&](const Vector &x) -> double { return inlet_BC_func(x, BC_toggle); } ); // Define a function coefficient that will apply "inlet_BC_func", which varies in space
     
-    // This can be modified to specify an Dirichlett condition at the outlet
-    //Array<int> marker_outlet_BC(mesh->bdr_attributes.Max()); // Define a marker array for the no-slip BC.
-    //marker_outlet_BC = 0; // Initialize marker array to "don't apply any essential BC".
-    //marker_outlet_BC[mesh_info["scalar_closure"]["outlet1"] - 1] = 1; // Set the third bdr attr group (i.e., physical group defined as 3 in gmsh file) as being the no-slip condition.
-    //FunctionCoefficient outlet_BC( [&](const Vector &x) -> double { return outlet_BC_func(x); } ); // Define a function coefficient that will apply "inlet_BC_func", which varies in space
+    
+    // Create the marker that labels the outlet boundary
+    Array<int> marker_outlet_BC(mesh->bdr_attributes.Max()); marker_outlet_BC = 0; // Initialize a marker array for the outlet BC
+    if (active_adjoint == 1) {
+        vector<int> outlet_PGs = (*mesh_info["scalar_closure"])["outlet1"];
+        for (int i_BCout = 0; i_BCout < outlet_PGs.size(); i_BCout++) { marker_outlet_BC[outlet_PGs[i_BCout] - 1] = 1; } // Set the bdr attr group for the outlet to 1
+    }
     
     cout << "Complete." << endl;
 
@@ -635,6 +760,8 @@ int main(int argc, char *argv[])
                 assert (Da_s.size() - 1 >= i_r);
                 
                 // Define a marker array for the heterogeneous reaction (i.e., Neumann BC)
+                cout << globalVars.FILENAME << ": CRITICAL ERROR: Need to reconsider the tags for reactive boundaries." << endl;
+                exit(1);
                 Array<int> marker_reaction_BC(mesh->bdr_attributes.Max()); marker_reaction_BC = 0; // Initialize marker array
                 marker_reaction_BC[(int)(*mesh_info["scalar_closure"])[reaction_pg_names[i_r]] - 1] = 1; // Assign marker array 1 for active reaction
                 
@@ -661,8 +788,25 @@ int main(int argc, char *argv[])
     BilinearForm *varf_cdiff(new BilinearForm(fespace_c));
     ConstantCoefficient Diff_coef(omega);
     varf_cdiff->AddDomainIntegrator(new DiffusionIntegrator(Diff_coef));
-    if (active_advection == 1) { varf_cdiff->AddDomainIntegrator(new ConvectionIntegrator(*fluid_velocity)); }
     
+    // If advection is active, add the advection term
+    std::unique_ptr<NegativeVectorCoefficient> neg_fluid_velocity;
+    std::unique_ptr<NormalDotVelocityCoefficient> n_dot_fluid_velocity;
+    if (active_advection == 1) {
+        if (active_adjoint == 1) {
+            // If adjoint is active, make the velocity negative and add the advection term
+            neg_fluid_velocity = std::make_unique<NegativeVectorCoefficient>(*fluid_velocity);
+            varf_cdiff->AddDomainIntegrator(new ConvectionIntegrator(*neg_fluid_velocity));
+
+            // Add the boundary flux term
+            n_dot_fluid_velocity = std::make_unique<NormalDotVelocityCoefficient>(*fluid_velocity);
+            varf_cdiff->AddBoundaryIntegrator(new BoundaryMassIntegrator(*n_dot_fluid_velocity), marker_outlet_BC);
+        }
+        else {
+            varf_cdiff->AddDomainIntegrator(new ConvectionIntegrator(*fluid_velocity));
+        }
+    }
+
     // Implement alpha for generalized closure residual (if available)
     if (useGenResForm) { gen_res_manager.ImplementAlpha(varf_cdiff); }
     
@@ -702,6 +846,15 @@ int main(int argc, char *argv[])
     SparseMatrix *BM_cavg(avgOp->Getavg_mat());
     Array<double> AR_areas(avgOp->GetAR_areas());
     
+    // If adjoint is active, we normalize BM_cavg by the area, and multiply by the area of the active_AR
+    if (active_adjoint == 1) {
+        SparseMatrix AR_areas_mat(AR_areas.Size(), AR_areas.Size());
+        for (int i = 0; i < AR_areas.Size(); i++) { AR_areas_mat.Set(i, i, AR_areas[active_AR] / AR_areas[i]); }
+        AR_areas_mat.Finalize();
+        mfem::Mult(AR_areas_mat, *BM_cavg, BM_cavg);
+        BM_cavg->Finalize();
+    }
+
     cout << "Complete." << endl;
     
 
@@ -724,7 +877,8 @@ int main(int argc, char *argv[])
     // Obtain the block matrix for adding "a" into the averaging operator, and multiply it by beta and gamma
     SparseMatrix BM_avgavg = avgOp->GetAR_areas_SpMat(); BM_avgavg.Finalize();
     if (useGenResForm) {
-        gen_res_manager.ConstructParamVecs(N_AR_global, AR_inds_loc2glob);
+        gen_res_manager.ConstructParamVecs(N_AR_global, AR_inds_loc2glob, true);
+        if (active_adjoint == 1) { for (int i = 0; i < N_AR; i++) { BM_avgavg.Set(i, i, AR_areas[active_AR] * AR_areas[active_AR] / AR_areas[i]); } } // If adjoint, make all areas the active AR area
         gen_res_manager.ImplementGamma(BM_avgavg, AR_inds_loc2glob);
         closureOp_BLK.SetBlock(1, 1, &BM_avgavg);
     }
@@ -860,12 +1014,36 @@ int main(int argc, char *argv[])
     ResultsSaver Saver;
     Saver.SetSolveMode(solve_mode);
     Saver.SetVariables(sim_key, recursive_iter, {"transport eq"}, {closure_output_file_name}, AR_number);
-    if (useLocalMesh == 1){ Saver.ObtainClosureResiduals(sol_BLK, {1}, {fespace_c->GetVDim()}, N_AR_global, AR_inds_loc2glob); }
+    /*
+    if (useLocalMesh == 1) {
+        bool obtainedResiduals = false;
+        if (useGenResForm) { if (gen_res_manager.GetIsSparseCoefVecs()) { Saver.ObtainClosureResiduals(sol_BLK, {1}, {fespace_c->GetVDim()}, N_AR); obtainedResiduals = true; } }
+        if (!obtainedResiduals) { Saver.ObtainClosureResiduals(sol_BLK, {1}, {fespace_c->GetVDim()}, N_AR_global, AR_inds_loc2glob); }
+    }
     else { Saver.ObtainClosureResiduals(sol_BLK, {1}, {fespace_c->GetVDim()}, N_AR_global); }
+    */
+    
+    // Save the residuals (i.e., the residuals of the mesh that was used: if a full mesh was used, a residual will be saved for each AR;
+    // if a local mesh was used, a residual will be saved for each AR in the local mesh). Also save the corresponding AR indices (i.e.,
+    // for a local mesh, these are the indices in AR_tags that identify which ARs were in the local mesh)
+    Saver.ObtainClosureResiduals(sol_BLK, {1}, {fespace_c->GetVDim()}, N_AR);
+    Saver.StoreResidualParameters("AR_inds", {{AR_inds_loc2glob}});
+    if (AR_macroIDs.size() > 0) { Saver.StoreResidualParameters("AR_macroIDs", {{AR_macroIDs}}); }
+    
+    // If the generalized residual form is available, save the corresponding parameters for each AR in the used mesh
+    // NOTE: gen_res_manager.GetIsSparseCoefVecs() should always be true now
     if (useGenResForm) {
-        Saver.StoreResidualParameters("alpha", {*gen_res_manager.GetParamVec("alpha")}, N_AR_global);
-        Saver.StoreResidualParameters("beta", {*gen_res_manager.GetParamVec("beta")}, N_AR_global);
-        Saver.StoreResidualParameters("gamma", {{*gen_res_manager.GetParamVec("gamma")}});
+        if (gen_res_manager.GetIsSparseCoefVecs()) {
+            Saver.StoreResidualParameters("alpha", {{*gen_res_manager.GetParamVec("alpha")}});
+            Saver.StoreResidualParameters("beta", {{*gen_res_manager.GetParamVec("beta")}});
+            Saver.StoreResidualParameters("gamma", {{*gen_res_manager.GetParamVec("gamma")}});
+            //Saver.StoreResidualParameters("AR_inds", {{*gen_res_manager.GetParamARInds()}});
+        }
+        else {
+            Saver.StoreResidualParameters("alpha", {*gen_res_manager.GetParamVec("alpha")}, N_AR_global);
+            Saver.StoreResidualParameters("beta", {*gen_res_manager.GetParamVec("beta")}, N_AR_global);
+            Saver.StoreResidualParameters("gamma", {{*gen_res_manager.GetParamVec("gamma")}});
+        }
     }
     Saver.SaveResidualDictionary(residual_output_file_path);
 

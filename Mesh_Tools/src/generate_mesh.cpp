@@ -113,15 +113,15 @@ int main(int argc, char **argv)
     string output_file_name = "mesh.msh";
     string mesh_info_dir = "./";
     string mesh_info_file_name = "mesh_info.txt";
-
+    string output_geo_dir = "./";
+    string output_geo_file_name = "geo.geo_unrolled";
+    
 
     // ===============================================================
     //   Search for config file path in argv (i.e., command line options) 
     // ===============================================================
-    for (int i = 1; i < argc; i++)
-    {
-        if ((string(argv[i]) == "-C" || string(argv[i]) == "--config_path") && i + 1 < argc)
-        {
+    for (int i = 1; i < argc; i++) {
+        if ((string(argv[i]) == "-C" || string(argv[i]) == "--config_path") && i + 1 < argc) {
             config_path = argv[i + 1];
             cout << "generate_mesh.cpp: Configuration path obtained from parser options: " << config_path << endl;
             break;
@@ -182,6 +182,10 @@ int main(int argc, char **argv)
         sub_dict.getValue("directory", output_dir);
         sub_dict.getValue("file name", output_file_name);
 
+        sub_dict = *mesh_dict["output geo path"];
+        sub_dict.getValue("directory", output_geo_dir);
+        sub_dict.getValue("file name", output_geo_file_name);
+
         sub_dict = *mesh_dict["info path"];
         sub_dict.getValue("directory", mesh_info_dir);
         sub_dict.getValue("file name", mesh_info_file_name);
@@ -200,12 +204,17 @@ int main(int argc, char **argv)
     string geometry_file_path = geometry_dir + geometry_file_name;
     string output_file_path = output_dir + output_file_name;
     string mesh_info_file_path = mesh_info_dir + mesh_info_file_name;
+    string output_geo_file_path = output_geo_dir + output_geo_file_name;
     
     // Make vectors L, ell, and N_AR (eventually, input should just give L, ell, and N_AR as vectors, not the components)
     std::vector<double> L = {L_x, L_y}; if (is3D == 1) { L.push_back( L_z ); }
     std::vector<double> ell = {ell_x, ell_y}; if (is3D == 1) { ell.push_back( ell_z ); }
     std::vector<int> N_AR = {N_AR_x, N_AR_y}; if (is3D == 1) { N_AR.push_back( N_AR_z ); }
 
+    // Define whether the mesh is periodic in at least one direction
+    bool meshIsPeriodic = false;
+    for (int i_prdc = 0; i_prdc < isPeriodic.size(); i_prdc++) { if (isPeriodic[i_prdc] == 1) { meshIsPeriodic = true; break; } }
+        
     
     // ===============================================================
     //   Define the option parser and add options that can be changed from the command line
@@ -325,7 +334,7 @@ int main(int argc, char **argv)
             // Load the cut geometry
             //load2DToolGeo(tool_sfs, tool_geo, geo_scale, -ell_x/2, 0.0, 0.0); // For a simple cut circle
             load2DToolGeo(tool_sfs, tool_geo, geo_scale, geometry_file_path);
-            
+                
             // Cut the averaging regions with the geometry
             gmsh::model::occ::cut(ARs_uc, tool_sfs, ARs, mapOut);
         }
@@ -342,6 +351,8 @@ int main(int argc, char **argv)
     // Synchronize the model
     // ========================================
     gmsh::model::occ::synchronize();
+    //gmsh::write("my_model.geo_unrolled"); // For debugging. Writes a (dense/heavy) file of the current gmsh model geometry
+    //exit(1);
     
     
     // ========================================
@@ -390,6 +401,7 @@ int main(int argc, char **argv)
     std::vector<int> no_slip_ln_tags, top_ln_tags, bottom_ln_tags, left_ln_tags, right_ln_tags, front_ln_tags, back_ln_tags, unused_ln_tags;
     std::vector<int> inner_geo_ln_tags;
     int inlet_tag, outlet_tag, no_slip_tag, unused_tag;
+    std::vector<int> inlet_PGs, outlet_PGs, no_slip_PGs, top_PGs, bottom_PGs;
     int top_tag, bottom_tag, left_tag, right_tag, front_tag, back_tag;
     int inner_tag;
     std::vector<int> inlet_AR_neighbors, outlet_AR_neighbors;
@@ -397,7 +409,7 @@ int main(int argc, char **argv)
     std::vector<double> AR_pore_space_areas;
 
     std::vector<std::vector<int>> domain_boundary_tags, boundary_neighbor_AR_tags, boundary_neighbor_PG;
-    std::vector<std::vector<int>> AR_neighbors;
+    std::vector<std::vector<int>> AR_neighbors, AR_neighbors_macroIDs;
     
     
     if (is3D)
@@ -502,6 +514,16 @@ int main(int argc, char **argv)
 
         
 
+
+
+        // TO REPLACE THE METHOD OF GETTING NEIGHBORING ARs
+        // ========================================
+        // Get the neighboring ARs for each AR (this includes diagonal neighbors; the code looks for any AR that share a point/line with other AR)
+        // ========================================
+        //cout << "generate_mesh.cpp: Obtaining lists of neighboring AR..." << endl;
+        //if (meshIsPeriodic) { getNeighboringARTags(AR_tags_toBeMerged, AR_tags, AR_neighbors, is3D, boundary_neighbor_PG, isPeriodic, L); }
+        //else { getNeighboringARTags(AR_tags_toBeMerged, AR_tags, AR_neighbors, is3D); }
+        //cout << "    Complete!" << endl;
 
 
         // ========================================
@@ -724,51 +746,31 @@ int main(int argc, char **argv)
         cout << "    Complete!" << endl;
 
 
+
+
+
         // ========================================
-        // Get the neighboring ARs for each AR (this includes diagonal neighbors; the code looks for any AR that share a point/line/surface with other AR)
+        // Get the neighboring ARs for each AR (this includes diagonal neighbors; the code looks for any AR that share a point/line with other AR)
         // ========================================
-        // Go through the AR_tags_toBeMerged, which provides the final number of AR (AR_tags_toBeMerged.size()), and the surface/volume tags to be merged to each that total of ARs
-        cout << "generate_mesh.cpp: Obtaining neighboring ARs lists..." << endl;
-        for (int i_ar = 0; i_ar < AR_tags_toBeMerged.size(); i_ar++) {
-            cout << "\r    Considering AR  i_ar = " << i_ar << "/" << AR_tags_toBeMerged.size() - 1 << "." << std::flush;
-            AR_neighbors.push_back( std::vector<int>() );
-            // Go through the tags to be merged for a certain AR
-            for (int i_tag = 0; i_tag < AR_tags_toBeMerged[i_ar].size(); i_tag++) {
-                
-                for (int i_ar2 = 0; i_ar2 < AR_tags_toBeMerged.size(); i_ar2++) {
-                    if (i_ar2 == i_ar) { continue; }
-                    for (int i_tag2 = 0; i_tag2 < AR_tags_toBeMerged[i_ar2].size(); i_tag2++) {
-                        //if (areAdjacentEntities(2 + is3D, AR_tags_toBeMerged[i_ar][i_tag], AR_tags_toBeMerged[i_ar2][i_tag2])) { AR_neighbors[i_ar].push_back( AR_tags[i_ar2] ); break; } // does not include diagonal neighbors
-                        if (shareAnyBoundaryEntities(2 + is3D, AR_tags_toBeMerged[i_ar][i_tag], AR_tags_toBeMerged[i_ar2][i_tag2])) { AR_neighbors[i_ar].push_back( AR_tags[i_ar2] ); break; } // includes diagonal neighbors
-                    }
-                }
-
-            }
-
-            // Remove the duplicates in the AR neighbor vector
-            std::sort(AR_neighbors[i_ar].begin(), AR_neighbors[i_ar].end());
-            auto last_unique = std::unique(AR_neighbors[i_ar].begin(), AR_neighbors[i_ar].end());
-            AR_neighbors[i_ar].erase(last_unique, AR_neighbors[i_ar].end());
-
-            // Report if the AR does not have any AR neighbors
-            if (AR_neighbors[i_ar].size() == 0) { cout << "generate_mesh.cpp: WARNING: AR " << i_ar << " does not have any neighboring AR! The code can continue, but it might be important to note this for your simulation." << endl; }
-        }
+        cout << "generate_mesh.cpp: Obtaining lists of neighboring AR..." << endl;
+        if (meshIsPeriodic) { getNeighboringARTags(AR_tags_toBeMerged, AR_tags, AR_neighbors, AR_neighbors_macroIDs, is3D, boundary_neighbor_PG, isPeriodic, L); }
+        else { getNeighboringARTags(AR_tags_toBeMerged, AR_tags, AR_neighbors, is3D); }
         cout << "    Complete!" << endl;
-        
 
 
-        // Moved these below the "Merge the small AR pore spaces" for now to allow AR tags start at 1.
-        
+        // (Moved these below the "AR merge" section to allow AR tags start at 1. Shouldn't be necessary though, as AR_tags is saved in saved mesh info.)        
         // ========================================
         // Create inlet, outlet, and no slip physical groups
         // ========================================
         std::vector<int> used_tags; int used_tag;
         
-        used_tag = getPhysicalGroup(inlet_tag, inletSide, 1, top_ln_tags, right_ln_tags, bottom_ln_tags, left_ln_tags);
+        //used_tag = getPhysicalGroup(inlet_tag, inletSide, 1, top_ln_tags, right_ln_tags, bottom_ln_tags, left_ln_tags);
+        used_tag = getPhysicalGroups(inlet_PGs, inletSide, 1, top_ln_tags, right_ln_tags, bottom_ln_tags, left_ln_tags);
         used_tags.push_back( used_tag );
         inlet_AR_neighbors = boundary_neighbor_PG[used_tag - 1];
 
-        used_tag = getPhysicalGroup(outlet_tag, outletSide, 1, top_ln_tags, right_ln_tags, bottom_ln_tags, left_ln_tags);
+        //used_tag = getPhysicalGroup(outlet_tag, outletSide, 1, top_ln_tags, right_ln_tags, bottom_ln_tags, left_ln_tags);
+        used_tag = getPhysicalGroups(outlet_PGs, outletSide, 1, top_ln_tags, right_ln_tags, bottom_ln_tags, left_ln_tags);
         used_tags.push_back( used_tag );
         outlet_AR_neighbors = boundary_neighbor_PG[used_tag - 1];
 
@@ -782,14 +784,13 @@ int main(int argc, char **argv)
             // If not, add it to the no slip tags
             if (used_tag == 0)
             {
-                if (i == 1) { no_slip_ln_tags.insert(no_slip_ln_tags.end(), top_ln_tags.begin(), top_ln_tags.end()); }
-                else if (i == 2) { no_slip_ln_tags.insert(no_slip_ln_tags.end(), right_ln_tags.begin(), right_ln_tags.end()); }
-                else if (i == 3) { no_slip_ln_tags.insert(no_slip_ln_tags.end(), bottom_ln_tags.begin(), bottom_ln_tags.end()); }
-                else if (i == 4) { no_slip_ln_tags.insert(no_slip_ln_tags.end(), left_ln_tags.begin(), left_ln_tags.end()); }
+                if (i == 1 && isPeriodic[1] == 0) { no_slip_ln_tags.insert(no_slip_ln_tags.end(), top_ln_tags.begin(), top_ln_tags.end()); }
+                else if (i == 2 && isPeriodic[0] == 0) { no_slip_ln_tags.insert(no_slip_ln_tags.end(), right_ln_tags.begin(), right_ln_tags.end()); }
+                else if (i == 3 && isPeriodic[1] == 0) { no_slip_ln_tags.insert(no_slip_ln_tags.end(), bottom_ln_tags.begin(), bottom_ln_tags.end()); }
+                else if (i == 4 && isPeriodic[0] == 0) { no_slip_ln_tags.insert(no_slip_ln_tags.end(), left_ln_tags.begin(), left_ln_tags.end()); }
             }
         }
         
-
 
         if (simulation_type == "homogenization closure") {
             top_tag = gmsh::model::addPhysicalGroup(1, top_ln_tags);
@@ -800,8 +801,11 @@ int main(int argc, char **argv)
         }
         else {
             // Define the no-slip tags
-            no_slip_tag = gmsh::model::addPhysicalGroup(1, no_slip_ln_tags);
+            //no_slip_tag = gmsh::model::addPhysicalGroup(1, no_slip_ln_tags);
+            for (int i_nst = 0; i_nst < no_slip_ln_tags.size(); i_nst++) { no_slip_PGs.push_back( gmsh::model::addPhysicalGroup(1, {no_slip_ln_tags[i_nst]}) ); }
+            
             //unused_tag = gmsh::model::addPhysicalGroup(1, unused_ln_tags);
+
         }
     }
     
@@ -828,6 +832,34 @@ int main(int argc, char **argv)
     }
     else {
         if (isPeriodic[0] == 1) {
+            
+            // NOTE: YOU MIGHT NEED TO DEFINE A PHYSICAL GROUP FOR LEFT AND RIGHT IF NOT ALREADY DONE SO THROUGH THE INLET AND OUTLET
+            /*
+            // Compile vector pairs of the bottom/top line tags and their masses (i.e., lengths)
+            vector<pair<int, double>> left_mass_tags, right_mass_tags;
+            for (int i = 0; i < left_ln_tags.size(); i++) {
+                left_mass_tags.push_back( pair<int, double>() ); right_mass_tags.push_back( pair<int, double>() );
+                left_mass_tags[i].first = left_ln_tags[i]; right_mass_tags[i].first = right_ln_tags[i];
+                gmsh::model::occ::getMass(1, left_ln_tags[i], left_mass_tags[i].second); gmsh::model::occ::getMass(1, right_ln_tags[i], right_mass_tags[i].second);
+            }
+
+            // Sort the vector pairs by the masses/lengths
+            std::sort(left_mass_tags.begin(), left_mass_tags.end(),
+                [](const pair<int, double> &a, pair<int, double> &b) { return a.second < b.second; });
+            std::sort(right_mass_tags.begin(), right_mass_tags.end(),
+                [](const pair<int, double> &a, pair<int, double> &b) { return a.second < b.second; });
+            
+            // 
+            double tol = 1.0e-8;
+            for (int i = 0; i < left_mass_tags.size(); i++) {
+                cout << left_mass_tags[i].second << " " << right_mass_tags[i].second << endl;
+                //assert (compareValues(bot_mass_tags[i].second, top_mass_tags[i].second, tol));
+                //gmsh::model::geo::mesh::setTransfiniteCurve(bot_mass_tags[i].first, (int)(L[0]/min_elem_size));
+                //gmsh::model::geo::mesh::setTransfiniteCurve(top_mass_tags[i].first, (int)(L[0]/min_elem_size));
+            }
+            */
+            
+
             for (int i = 0; i < left_ln_tags.size(); i++) {
                 gmsh::model::geo::mesh::setTransfiniteCurve(left_ln_tags[i], (int)(ell[1]/min_elem_size)); } // update: this should probably be the (length of each left_ln_tags) / min_elem_size
                 //double tag_length; gmsh::model::occ::getMass(1, left_ln_tags[i], tag_length);
@@ -838,13 +870,61 @@ int main(int argc, char **argv)
                 //gmsh::model::geo::mesh::setTransfiniteCurve(right_ln_tags[i], (int)(tag_length/min_elem_size)); } // update: this should probably be the (length of each left_ln_tags) / min_elem_size
         }
         if (isPeriodic[1] == 1) {
-            for (int i = 0; i < bottom_ln_tags.size(); i++) { gmsh::model::geo::mesh::setTransfiniteCurve(bottom_ln_tags[i], (int)(L[0]/min_elem_size)); }
-            for (int i = 0; i < top_ln_tags.size(); i++) { gmsh::model::geo::mesh::setTransfiniteCurve(top_ln_tags[i], (int)(L[0]/min_elem_size)); }
+            // Make sure there are the same number of bottom and top line tags. If not, the geometry is probably unable to be periodic
+            cout << "Number of bottom line tags: " << bottom_ln_tags.size() << ". Number of top line tags: " << top_ln_tags.size() << endl;
+            //assert (bottom_ln_tags.size() == top_ln_tags.size());
+            /*
+            // Compile vector pairs of the bottom/top line tags and their masses (i.e., lengths)
+            vector<pair<int, double>> bot_mass_tags, top_mass_tags;
+            for (int i = 0; i < bottom_ln_tags.size(); i++) {
+                bot_mass_tags.push_back( pair<int, double>() ); top_mass_tags.push_back( pair<int, double>() );
+                bot_mass_tags[i].first = bottom_ln_tags[i]; top_mass_tags[i].first = top_ln_tags[i];
+                gmsh::model::occ::getMass(1, bottom_ln_tags[i], bot_mass_tags[i].second); gmsh::model::occ::getMass(1, top_ln_tags[i], top_mass_tags[i].second);
+            }
+
+            // Sort the vector pairs by the masses/lengths
+            std::sort(bot_mass_tags.begin(), bot_mass_tags.end(),
+                [](const pair<int, double> &a, pair<int, double> &b) { return a.second < b.second; });
+            std::sort(top_mass_tags.begin(), top_mass_tags.end(),
+                [](const pair<int, double> &a, pair<int, double> &b) { return a.second < b.second; });
+            
+            // 
+            double tol = 1.0e-8;
+            for (int i = 0; i < bot_mass_tags.size(); i++) {
+                cout << bot_mass_tags[i].second << " " << top_mass_tags[i].second << endl;
+                //assert (compareValues(bot_mass_tags[i].second, top_mass_tags[i].second, tol));
+                //gmsh::model::geo::mesh::setTransfiniteCurve(bot_mass_tags[i].first, (int)(L[0]/min_elem_size));
+                //gmsh::model::geo::mesh::setTransfiniteCurve(top_mass_tags[i].first, (int)(L[0]/min_elem_size));
+            }
+            */
+            
+
+            // Need to define the top and bottom line tags as physical groups so that they are saved (in the gmsh mesh) as DOFs (for MFEM)
+            //gmsh::model::addPhysicalGroup(1, top_ln_tags);
+            //gmsh::model::addPhysicalGroup(1, bottom_ln_tags);
+            for (int i_tag = 0; i_tag < top_ln_tags.size(); i_tag++) { top_PGs.push_back( gmsh::model::addPhysicalGroup(1, {top_ln_tags[i_tag]}) ); }
+            for (int i_tag = 0; i_tag < bottom_ln_tags.size(); i_tag++) { bottom_PGs.push_back( gmsh::model::addPhysicalGroup(1, {bottom_ln_tags[i_tag]}) ); }
+            
+            for (int i = 0; i < bottom_ln_tags.size(); i++) {
+                gmsh::model::geo::mesh::setTransfiniteCurve(bottom_ln_tags[i], (int)(L[0]/min_elem_size));
+                //double tag_length; gmsh::model::occ::getMass(1, bottom_ln_tags[i], tag_length);
+                //gmsh::model::geo::mesh::setTransfiniteCurve(bottom_ln_tags[i], (int)(tag_length/min_elem_size));
+            }
+            for (int i = 0; i < top_ln_tags.size(); i++) {
+                gmsh::model::geo::mesh::setTransfiniteCurve(top_ln_tags[i], (int)(L[0]/min_elem_size));
+                //double tag_length; gmsh::model::occ::getMass(1, top_ln_tags[i], tag_length);
+                //gmsh::model::geo::mesh::setTransfiniteCurve(top_ln_tags[i], (int)(tag_length/min_elem_size));
+            }
+            
         }
         gmsh::model::geo::synchronize();
     }
     cout << "    Complete!" << endl;
     
+
+
+    // Save the geometry as a .geo_unrolled file so that it can be opened in gmsh, or used in "juxtapose_unitcell.cpp" to create a periodic mesh from a square periodic unit-cell geometry
+    gmsh::write(output_geo_file_path);
 
     
     
@@ -868,8 +948,14 @@ int main(int argc, char **argv)
     }
     AR_dict["pore_areas"] = AR_pore_space_areas; // We now compute and record the pore-space areas in this file, as opposed to the solver file
     AR_dict["neighbors"] = AR_neighbors;
+    if (!is3D && meshIsPeriodic) {
+        AR_dict["neighbor macroIDs"] = AR_neighbors_macroIDs;
+        std::vector<std::vector<int>> macroID_to_coords; getMacroIDToCoords(macroID_to_coords);
+        AR_dict["macroID-coords key"] = macroID_to_coords;
+
+        //AR_dict["macroStarts"] = AR_tag_macrostarts;
+    }
     bdr_tag_file_new["AR"] = &AR_dict;
-    
     
 
     // -----------------------
@@ -889,19 +975,37 @@ int main(int argc, char **argv)
         }
         bdr_tag_file_new["homogenization"] = &homogenization_dict;
     }
-    else
+    else if (simulation_type == "MoFA new format")
     {
         // Create the Stokes sub-dictionary (containing tags for BCs in the Stokes problem)
-        stokes_dict["inlet1"] = inlet_tag;
-        stokes_dict["inlet1 AR neighbors"] = inlet_AR_neighbors;
-        stokes_dict["noslip1"] = no_slip_tag;
-        bdr_tag_file_new["stokes"] = &stokes_dict;
+        //stokes_dict["inlet1"] = inlet_tag_set;
+        //stokes_dict["inlet1 AR neighbors"] = inlet_AR_neighbors;
+        //stokes_dict["noslip1"] = no_slip_tag_set;
+        //bdr_tag_file_new["stokes"] = &stokes_dict;
 
 
         // Create the scalar closure sub-dictionary (containing tags for BCs in the scalar closure problem)
-        transport_dict["inlet1"] = inlet_tag;
+        //transport_dict["inlet1"] = inlet_tag_set;
+        //transport_dict["inlet1 AR neighbors"] = inlet_AR_neighbors;
+        //transport_dict["outlet1"] = outlet_tag_set;
+        //transport_dict["outlet1 AR neighbors"] = outlet_AR_neighbors;
+        //bdr_tag_file_new["scalar_closure"] = &transport_dict;
+    }
+    else
+    {
+        // Create the Stokes sub-dictionary (containing tags for BCs in the Stokes problem)
+        stokes_dict["inlet1"] = inlet_PGs; //stokes_dict["inlet1"] = inlet_tag;
+        stokes_dict["inlet1 AR neighbors"] = inlet_AR_neighbors;
+        stokes_dict["noslip1"] = no_slip_PGs; //stokes_dict["noslip1"] = no_slip_tag;
+        stokes_dict["top1"] = top_PGs;
+        stokes_dict["bottom1"] = bottom_PGs;
+        stokes_dict["outlet1"] = outlet_PGs;
+        bdr_tag_file_new["stokes"] = &stokes_dict;
+
+        // Create the scalar closure sub-dictionary (containing tags for BCs in the scalar closure problem)
+        transport_dict["inlet1"] = inlet_PGs; //transport_dict["inlet1"] = inlet_tag;
         transport_dict["inlet1 AR neighbors"] = inlet_AR_neighbors;
-        transport_dict["outlet1"] = outlet_tag;
+        transport_dict["outlet1"] = outlet_PGs; //transport_dict["outlet1"] = outlet_tag;
         transport_dict["outlet1 AR neighbors"] = outlet_AR_neighbors;
         // Create the boundary physical groups defined by the user
         if (!is3D && pg_names.size() != 0) {
@@ -927,12 +1031,11 @@ int main(int argc, char **argv)
     bdr_tag_file_new.saveToFile(mesh_info_file_path);
     cout << "    Complete!" << endl;
     
-
+    
     // ========================================
     // Generate a 2D mesh
     // ========================================
     cout << "generate_mesh.cpp: Generating and saving mesh..." << endl;
-    //generateMesh(output_file_path, is3D, {min_elem_size, max_elem_size});
     gmsh::option::setNumber("Mesh.CharacteristicLengthMin", min_elem_size);
     gmsh::option::setNumber("Mesh.CharacteristicLengthMax", max_elem_size);
     if (is3D) { gmsh::model::mesh::generate(3); } // The "3" is for 3D.

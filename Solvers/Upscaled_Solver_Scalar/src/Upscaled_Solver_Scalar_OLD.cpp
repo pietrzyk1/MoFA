@@ -49,15 +49,11 @@ public:
     static constexpr vector<double>* GetParamVec(const char* param_name) { return nullptr; };
     bool LoadParamDicts(JSONDict &eq_dict);
     void ImplementGeneralizedResidual(vector<double> &temp, vector<string> keys, int N_AR, bool isKMat = false);
-    void ImplementGeneralizedResidual(vector<double> &temp, vector<int> &AR_inds, vector<string> keys, bool isKMat = false);
     void CreateTransform(JSONDict &closure_residuals_dict, vector<double> &porosities, int N_AR, double epsilon, double omega);
-    void CreateTransformSpMat(JSONDict &closure_residuals_dict, vector<double> &porosities, int N_AR, double epsilon, double omega);
-    void ModifyTransform(vector<double> &temp, vector<int> &AR_inds, vector<string> keys, bool addOne = false);
     void ModifyTransform(vector<double> &temp, vector<string> keys, bool addOne = false);
     void ApplyTransform(vector<vector<double>> &avg_sol, const Vector &temp_sols, int N_AR, double fip1, double fi, double dt);
-    void ApplyTransformSpMat(vector<vector<double>> &avg_sol, const Vector &temp_sols, int N_AR, double fip1, double fi, double dt);
     bool GetUseGenResForm();
-    SparseMatrix* GetTransform();
+    DenseMatrix* GetTransform();
     Vector GetTransf();
     Vector GetTransdfdt();
 };
@@ -202,7 +198,7 @@ int main(int argc, char *argv[])
         cerr << globalVars.FILENAME << ": main: Error in loading config file." << endl;
         return 1;
     }
-    
+
     // Initialize paths and file names from the parts taken from the defaults (either in the variable declarations or the config file)
     string mesh_file_path = mesh_dir + mesh_file_name;
     string mesh_info_file_path = mesh_info_dir + mesh_info_file_name;
@@ -217,6 +213,7 @@ int main(int argc, char *argv[])
     // ===============================================================
     OptionsParser args(argc, argv);
     args.AddOption(&config_path, "-C", "--config_path", "The path to the configuration file.");
+    //args.AddOption(&output_file_path, "-O", "--output_file_path", "Output file path for the upscaled solution (use config file for more detailed file names, directories, etc.).");
     args.ParseCheck();
     
 
@@ -224,18 +221,22 @@ int main(int argc, char *argv[])
     //   Get the mesh and define a finite element space for plotting the avg solution
     // ===============================================================
     // Load the mesh info file, and the relevant quantities from it
-    JSONDict mesh_info; mesh_info.loadFromFile(mesh_info_file_path);
+    JSONDict mesh_info;
+    mesh_info.loadFromFile(mesh_info_file_path);
     int N_AR = (int)(*mesh_info["AR"])["total_number"];
     vector<int> AR_tags = (*mesh_info["AR"])["tags"];
     string avg_area_type = (*mesh_info["AR"])["area_type"];
+
+    // Define pointers for the mesh, finite element collection and space, and avg concentration gridfunction
+    std::unique_ptr<Mesh> mesh;
     
     // Create a superficial mesh (i.e., mesh of ARs), a function space for that mesh, and a gridfunction on
     // that mesh in case the averaging area type calls for it. If the averaging area type is "AR", it means
     // the superficial average (i.e., average over the AR, not the pore-space) will be used. If it is "pore",
     // then the pore-space average will be used
-    std::unique_ptr<Mesh> mesh;
     if (avg_area_type == "AR") { mesh = std::make_unique<Mesh>(Mesh::MakeCartesian2D(N_AR_x, N_AR_y, Element::Type::QUADRILATERAL, false, N_AR_x, N_AR_y)); }
-    else { mesh = std::make_unique<Mesh>(mesh_file_path); } // Use the provided mesh file to define the mesh
+    // Use the provided mesh file to define the mesh
+    else { mesh = std::make_unique<Mesh>(mesh_file_path); }
     
     // Create the finite element space for concentration (this is for plotting the average in the AR or pore space depending on the porosities avaiable)
     FiniteElementCollection *fec_c = new DG_FECollection(1, mesh->Dimension());
@@ -287,9 +288,8 @@ int main(int argc, char *argv[])
     // average concentrations, M and K are matrices, Mf and Kf are vectors, and f is a scalar
     //
     // Initialize variables for loading closure residuals into K and M tensors, and Kf and Mf vectors
-    SparseMatrix K(N_AR, N_AR), M(N_AR, N_AR);
-    Vector Kf(N_AR), Mf(N_AR); Kf = 0.0; Mf = 0.0;
-    
+    vector<double> K_col_major, M_col_major, temp;
+    Vector Kf(N_AR), Mf(N_AR);
 
     
     // ===============================================================
@@ -297,7 +297,7 @@ int main(int argc, char *argv[])
     JSONDict closure_residuals_dict; closure_residuals_dict.loadFromFile(residual_file_path);
     GeneralizedResidualManager gen_res_manager;
     bool useGenResForm;
-    
+
     
     // ===============================================================
     //   Load residuals into the K matrix
@@ -312,7 +312,6 @@ int main(int argc, char *argv[])
     
     // Obtain the residual dictionary for the specified simulation type, time derivative iteration, and equation
     JSONDict res_dict_dummy; eq_dict.getValue("residuals", res_dict_dummy);
-    JSONDict AR_inds_dict_dummy; eq_dict.getValue("AR_inds", AR_inds_dict_dummy);
 
     // If the code for implementing the general residual form is available, and any of the corresponding parameters
     // are different than what would collapse to the canonical residual form, implement the general residual form
@@ -323,15 +322,13 @@ int main(int argc, char *argv[])
     for (int i_AR = 0; i_AR < N_AR; i_AR++) {
         // Get the raw residual vector
         string i_AR_str = to_string(i_AR);
-        vector<double> temp = (*(res_dict_dummy[comp_key]))[i_AR_str];
-        vector<int> AR_inds = (*(AR_inds_dict_dummy[comp_key]))[i_AR_str];
-        
+        temp = (*(res_dict_dummy[comp_key]))[i_AR_str];
         // If generalized-residual parameters were found in eq_dict by gen_res_manager, appy them to temp
-        if (useGenResForm) { gen_res_manager.ImplementGeneralizedResidual(temp, AR_inds, {comp_key, i_AR_str}, true); }
+        if (useGenResForm) { gen_res_manager.ImplementGeneralizedResidual(temp, {comp_key, i_AR_str}, N_AR, true); }
         // Divide by the porosity (to potentially make the averages "superficial averages")
-        for (int j_AR = 0; j_AR < AR_inds.size(); j_AR++) { temp[j_AR] *= 1/porosities[i_AR]; }
+        for (int j_AR = 0; j_AR < N_AR; j_AR++) { temp[j_AR] *= 1/porosities[i_AR]; }
         // Add the temp vector to the K matrix
-        for (int i = 0; i < AR_inds.size(); i++) { K.Add(AR_inds[i], i_AR, temp[i]); }
+        K_col_major.insert(K_col_major.end(), temp.begin(), temp.end());
     }
 
 
@@ -343,30 +340,27 @@ int main(int argc, char *argv[])
     eq_key = "transport eq";
     comp_key = "component 0";
     
+
     // Load the dictionary holding the residuals (and generalized closure residual parameters)
     eq_dict = *(*(*closure_residuals_dict[sim_type])["iter_" + i_iter_str])[eq_key];
     
     // Obtain the residual dictionary for the specified simulation type, time derivative iteration, and equation
     res_dict_dummy.clear(); eq_dict.getValue("residuals", res_dict_dummy);
-    AR_inds_dict_dummy.clear(); eq_dict.getValue("AR_inds", AR_inds_dict_dummy);
 
     // If the code for implementing the general residual form is available, and any of the corresponding parameters
     // are different than what would collapse to the canonical residual form, implement the general residual form
     useGenResForm = false;
     if (genResFormAvailable) { useGenResForm = gen_res_manager.LoadParamDicts(eq_dict); }
     
-    {
-        // Get the raw residual vector
-        vector<double> temp = (*res_dict_dummy[comp_key])["0"];
-        vector<int> AR_inds = (*(AR_inds_dict_dummy[comp_key]))["0"];
-        
-        // If generalized-residual parameters were found in eq_dict by gen_res_manager, appy them to temp
-        if (useGenResForm) { gen_res_manager.ImplementGeneralizedResidual(temp, AR_inds, {comp_key, "0"}, false); }
-        
-        // Assign the temp vector to the Kf vector
-        for (int i = 0; i < AR_inds.size(); i++) { Kf[AR_inds[i]] = temp[i]; }
-    }
-
+    // Get the raw residual vector
+    temp = (*res_dict_dummy[comp_key])["0"];
+    
+    // If generalized-residual parameters were found in eq_dict by gen_res_manager, appy them to temp
+    if (useGenResForm) { gen_res_manager.ImplementGeneralizedResidual(temp, {comp_key, "0"}, N_AR, false); }
+    
+    // Assign the temp vector to the Kf vector
+    for (int i = 0; i < N_AR; i++) { Kf[i] = temp[i]; }
+    
 
     // ===============================================================
     //   Load residuals into the M matrix
@@ -382,7 +376,6 @@ int main(int argc, char *argv[])
     
     // Obtain the residual dictionary for the specified simulation type, time derivative iteration, and equation
     res_dict_dummy.clear(); eq_dict.getValue("residuals", res_dict_dummy);
-    AR_inds_dict_dummy.clear(); eq_dict.getValue("AR_inds", AR_inds_dict_dummy);
 
     // If the code for implementing the general residual form is available, and any of the corresponding parameters
     // are different than what would collapse to the canonical residual form, implement the general residual form
@@ -393,15 +386,13 @@ int main(int argc, char *argv[])
     for (int i_AR = 0; i_AR < N_AR; i_AR++) {
         // Get the raw residual vector
         string i_AR_str = to_string(i_AR);
-        vector<double> temp = (*(res_dict_dummy[comp_key]))[i_AR_str];
-        vector<int> AR_inds = (*(AR_inds_dict_dummy[comp_key]))[i_AR_str];
-        
+        temp = (*(res_dict_dummy[comp_key]))[i_AR_str];
         // If generalized-residual parameters were found in eq_dict by gen_res_manager, appy them to temp
-        if (useGenResForm) { gen_res_manager.ImplementGeneralizedResidual(temp, AR_inds, {comp_key, i_AR_str}, false); }
+        if (useGenResForm) { gen_res_manager.ImplementGeneralizedResidual(temp, {comp_key, i_AR_str}, N_AR, false); }
         // Divide by the porosity (to potentially make the averages "superficial averages")
-        for (int j_AR = 0; j_AR < AR_inds.size(); j_AR++) { temp[j_AR] *= 1/porosities[i_AR]; }      // DIVIDE BY XI HERE %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+        for (int j_AR = 0; j_AR < N_AR; j_AR++) { temp[j_AR] *= 1/porosities[i_AR]; }
         // Add the temp vector to the M matrix
-        for (int i = 0; i < AR_inds.size(); i++) { M.Add(AR_inds[i], i_AR, temp[i]); }
+        M_col_major.insert(M_col_major.end(), temp.begin(), temp.end());
     }
 
 
@@ -419,36 +410,42 @@ int main(int argc, char *argv[])
     
     // Obtain the residual dictionary for the specified simulation type, time derivative iteration, and equation
     res_dict_dummy.clear(); eq_dict.getValue("residuals", res_dict_dummy);
-    AR_inds_dict_dummy.clear(); eq_dict.getValue("AR_inds", AR_inds_dict_dummy);
 
     // If the code for implementing the general residual form is available, and any of the corresponding parameters
     // are different than what would collapse to the canonical residual form, implement the general residual form
     useGenResForm = false;
     if (genResFormAvailable) { useGenResForm = gen_res_manager.LoadParamDicts(eq_dict); }
     
-    {
-        // Get the raw residual vector
-        vector<double> temp = (*res_dict_dummy[comp_key])["0"];
-        vector<int> AR_inds = (*(AR_inds_dict_dummy[comp_key]))["0"];
-        
-        // If generalized-residual parameters were found in eq_dict by gen_res_manager, appy them to temp
-        if (useGenResForm) { gen_res_manager.ImplementGeneralizedResidual(temp, AR_inds, {comp_key, "0"}, false); }
-        
-        // Assign the temp vector to the Mf vector
-        for (int i = 0; i < AR_inds.size(); i++) { Mf[AR_inds[i]] = temp[i]; }          // DIVIDE BY XI HERE %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-    }
+    // Get the raw residual vector
+    temp = (*res_dict_dummy[comp_key])["0"];
+    
+    // If generalized-residual parameters were found in eq_dict by gen_res_manager, appy them to temp
+    if (useGenResForm) { gen_res_manager.ImplementGeneralizedResidual(temp, {comp_key, "0"}, N_AR, false); }
+    
+    // Assign the temp vector to the Mf vector
+    for (int i = 0; i < N_AR; i++) { Mf[i] = temp[i]; }
 
 
     // ===============================================================
     //   Create the actual K and M matrices
 
+    // Create the dense mass and stiffness matrices
+    DenseMatrix M_dense(M_col_major.data(), N_AR, N_AR), K_dense(K_col_major.data(), N_AR, N_AR);    
+    K_dense *= 1/globalVars.epsilon/globalVars.epsilon /omega/omega;
+    Kf *= 1/globalVars.epsilon/globalVars.epsilon /omega/omega;
+    SparseMatrix M(N_AR), K(N_AR);
+
+    for (int i = 0; i < N_AR; i++) {
+        for (int j = 0; j < N_AR; j++) {
+            double val = M_dense(i, j);
+            if (val != 0.0) { M.Add(i, j, val); }
+            val = K_dense(i, j);
+            if (val != 0.0) { K.Add(i, j, val); }
+        }
+    }
     K.Finalize();
     M.Finalize();
 
-    // Create the dense mass and stiffness matrices
-    K *= 1/globalVars.epsilon/globalVars.epsilon /omega/omega;
-    Kf *= 1/globalVars.epsilon/globalVars.epsilon /omega/omega;
-    
     /*
     Array<int> cols; Vector vals;
     M.GetRow(5, cols, vals);
@@ -457,13 +454,13 @@ int main(int argc, char *argv[])
     }
     exit(1);
     */
-   
+    
 
     // ===============================================================
     //   Create the transform if the code for the general residual
     //   form is available
     // ===============================================================
-    if (genResFormAvailable) { gen_res_manager.CreateTransformSpMat(closure_residuals_dict, porosities, N_AR, globalVars.epsilon, omega); }
+    if (genResFormAvailable) { gen_res_manager.CreateTransform(closure_residuals_dict, porosities, N_AR, globalVars.epsilon, omega); }
 
 
     // ===============================================================
@@ -502,7 +499,7 @@ int main(int argc, char *argv[])
     // Define the time stepping operator for ODE systems of the form   M * du/dt + K * u = b, and set the initial time
     LinearTimeDependentOperator oper(M, K, b_BLK, dt);
     oper.SetTime(t);
-    oper.PrepareImplicitEuler("GMRESSolver", "GSSmoother");
+    oper.PrepareImplicitEuler();
 
 
     // Initialize the vectors for saving the average solutions
@@ -517,7 +514,7 @@ int main(int argc, char *argv[])
 
     // Save the initial condition
     for (int i = 0; i < N_AR; i++) { avg_sol[i].push_back(sol_BLK.GetBlock(0).Elem(i)); }
-    CreateAvgSolGridFunction(sol_BLK.GetBlock(0), *avg_sol_GF, avg_area_type, AR_tags);
+    CreateAvgSolGridFunction(sol_BLK.GetBlock(0), *avg_sol_GF, avg_area_type);
     avg_sol_GF->Save((output_dir + output_file_name_prefix + to_string(avg_sol[0].size() - 1) + output_file_name_suffix).c_str());
     
 
@@ -571,18 +568,19 @@ int main(int argc, char *argv[])
                 Vector temp_sols(2*N_AR);
                 for (int i_temp = 0; i_temp < N_AR; i_temp++) { temp_sols.Elem(i_temp) = sol_BLK.GetBlock(0).Elem(i_temp); }
                 for (int i_temp = 0; i_temp < N_AR; i_temp++) { temp_sols.Elem(i_temp + N_AR) = du_dt.GetBlock(0).Elem(i_temp); }
-                gen_res_manager.ApplyTransformSpMat(avg_sol, temp_sols, N_AR, fip1, fi, dt);
+                gen_res_manager.ApplyTransform(avg_sol, temp_sols, N_AR, fip1, fi, dt);
             }
             else { for (int i = 0; i < N_AR; i++) { avg_sol[i].push_back(sol_BLK.GetBlock(0).Elem(i)); } }
             
             // Save the average solution as a gridfunction
             for (int i = 0; i < N_AR; i++) { avg_sol_saved[i] = avg_sol[i][avg_sol[i].size() - 1]; }
-            CreateAvgSolGridFunction(avg_sol_saved, *avg_sol_GF, avg_area_type, AR_tags);
+            //CreateAvgSolGridFunction(sol_BLK.GetBlock(0), *avg_sol_GF, avg_area_type);
+            CreateAvgSolGridFunction(avg_sol_saved, *avg_sol_GF, avg_area_type);
             avg_sol_GF->Save((output_dir + output_file_name_prefix + to_string(avg_sol[0].size() - 1) + output_file_name_suffix).c_str());
         }
         
         // Print the maximum value to the consol (for debugging purposes...)
-        cout << "Max avg c: " << sol_BLK.GetBlock(0).Max() << ", fi: " << fi << endl;
+        cout << "Max avg c: " << sol_BLK.GetBlock(0).Max() << ", avg c(0): " << sol_BLK.GetBlock(0).Elem(0) << ", fi: " << fi << endl;
     }
 
     for (int i = 0; i < sol_BLK.GetBlock(0).Size(); i++)

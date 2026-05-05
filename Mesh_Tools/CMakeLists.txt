@@ -1,4 +1,4 @@
-#lL.lH.
+# lL.lH.
 #
 # Copyright (c) 2025, Lawrence Livermore National Security, LLC
 # and other MoFA project developers. All Rights reserved.
@@ -9,7 +9,7 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 #
-#lL.lH.
+# lL.lH.
 
 # Include the path configuration cmake file for the various source directory paths
 include(${CMAKE_SOURCE_DIR}/../cmake/Configuration_Paths.cmake)
@@ -55,3 +55,14 @@ add_executable(scale_mesh ${PROJECT_SOURCE_DIR}/src/scale_mesh.cpp ${UTILITY_SOU
 
 # Now we actually link the libraries to the executable
 target_link_libraries(scale_mesh libgmsh.so)
+
+
+#######################################
+# Make the juxtapose unit cell executable
+#######################################
+
+# Add the executable we want to build
+add_executable(juxtapose_unitcell ${PROJECT_SOURCE_DIR}/src/juxtapose_unitcell.cpp ${UTILITY_SOURCE_DIR}/src/JSON_IO.cpp ${MESH_TOOLS_SOURCE_DIR}/src/gmsh_utils.cpp)
+
+# Now we actually link the libraries to the executable
+target_link_libraries(juxtapose_unitcell libgmsh.so)

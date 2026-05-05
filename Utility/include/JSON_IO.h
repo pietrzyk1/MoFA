@@ -59,7 +59,7 @@ struct JSONDict;
 struct JSONVal;
 
 
-using JSONARGType = variant< int, double, string, vector<JSONVal>, vector<vector<JSONVal>>, JSONDict* >;
+using JSONARGType = variant< int, double, string, vector<JSONVal>, vector<vector<JSONVal>>, vector<vector<vector<JSONVal>>>, JSONDict* >;
 
 
 // Define a basic structure for the JSON dictionary arguments (see JSONARGType for what types can be handled)
@@ -98,6 +98,21 @@ struct JSONVal : JSONARGType
             vec.emplace_back( vector<JSONVal>() );
             for (int item2 : item) { vec[count].emplace_back(item2); }
             count += 1;
+        }
+        *this = vec;
+    }
+    // Allows JSONVal variables to be assigned as vector<vector<vector<int>>> (e.g., JSONVal a = b, where b is a vector<vector<vector<int>>>)
+    JSONVal(vector<vector<vector<int>>> &list)
+    {
+        vector<vector<vector<JSONVal>>> vec;
+        for (int i = 0; i < list.size(); i++) {
+            vec.emplace_back( vector<vector<JSONVal>>() );
+            for (int j = 0; j < list[i].size(); j++) {
+                vec[i].emplace_back( vector<JSONVal>() );
+                for (int k = 0; k < list[i][j].size(); k++) {
+                    vec[i][j].emplace_back(list[i][j][k]);
+                }
+            }
         }
         *this = vec;
     }
@@ -219,6 +234,26 @@ struct JSONVal : JSONARGType
         }
         throw bad_variant_access();  // Error out
     }
+    // For writting stuff like vector<vector<vector<int>>> var = vector<vector<vector<JSONVal>>> var2
+    template <typename T, typename = enable_if_t< is_convertible_v<T, JSONVal> >>
+    operator vector<vector<vector<T>>>() const {
+        if (auto ptr = get_if<vector<vector<vector<JSONVal>>>>(this))
+        {
+            vector<vector<vector<T>>> ptr2;
+            for (int i = 0; i < ptr->size(); i++)
+            {
+                ptr2.push_back( vector<vector<T>>() );
+                for (int j = 0; j < (*ptr)[i].size(); j++) {
+                    ptr2[i].push_back( vector<T>() );
+                    for (int k = 0; k < (*ptr)[i][j].size(); k++) {
+                        ptr2[i][j].push_back( (T)(*ptr)[i][j][k] );
+                    }
+                }
+            }
+            return ptr2;
+        }
+        throw bad_variant_access();  // Error out
+    }
 
 
 
@@ -267,6 +302,30 @@ struct JSONVal : JSONARGType
                 oss << "]";
                 return oss.str();
             }
+            else if constexpr (is_same_v<T, vector<vector<vector<JSONVal>>>>)
+            {
+                ostringstream oss;
+                oss << "[";
+                for (int i = 0; i < val.size(); i++)
+                {
+                    oss << "[";
+                    for (int j = 0; j < val[i].size(); j++)
+                    {
+                        oss << "[";
+                        for (int k = 0; k < val[i][j].size(); k++)
+                        {
+                            oss << val[i][j][k].to_string(indent, level);
+                            if (k + 1 < val[i][j].size()) { oss << ", "; }
+                        }
+                        oss << "]";
+                        if (j + 1 < val[i].size()) { oss << ", "; }
+                    }
+                    oss << "]";
+                    if (i + 1 < val.size()) { oss << ", "; }
+                }
+                oss << "]";
+                return oss.str();
+            }
             else if constexpr (is_same_v<T, int>)
             {
                 ostringstream oss;
@@ -293,6 +352,7 @@ struct JSONVal : JSONARGType
             else
             {
                 cerr << "CRITICAL ERROR: JSON_IO.h: JSONVal::to_string(): Could not identify input." << endl;
+                exit(1);
                 return "<<ERROR>>";
             }
         }, *this);
@@ -361,7 +421,8 @@ struct JSONDict : map<string, JSONVal>
     void getValue(const string &key, int &external_value)
     {
         // Check the ints
-        if (*this->find(key) != *this->end())
+        //if (*this->find(key) != *this->end())
+        if ((*this).find(key) != (*this).end())
         {
             external_value = (int)(*this)[key];
             return;
@@ -385,6 +446,16 @@ struct JSONDict : map<string, JSONVal>
         if ((*this).find(key) != (*this).end())
         {
             external_value = (vector<vector<int>>)(*this)[key];
+            return;
+        }
+    }
+    // Function to get vector<vector<vector<int>>> values from a dictionary if the provided key is in the dictionary
+    void getValue(const string &key, vector<vector<vector<int>>> &external_value)
+    {
+        // Check the ints
+        if ((*this).find(key) != (*this).end())
+        {
+            external_value = (vector<vector<vector<int>>>)(*this)[key];
             return;
         }
     }
@@ -674,6 +745,11 @@ struct JSONDict : map<string, JSONVal>
             string str = ReadString(line, pos);
             k[key] = str;
         }
+        else if (line[pos] == '[' && line[pos + 1] == '[' && line[pos + 2] == '[') // If the first 3 characters indicate a nested vector
+        {
+            vector<vector<vector<JSONVal>>> nestedVec = GetNestedVector2(line, pos);
+            k[key] = nestedVec;
+        }
         else if (line[pos] == '[' && line[pos + 1] == '[') // If the first 2 characters indicate a nested vector
         {
             vector<vector<JSONVal>> nestedVec = GetNestedVector(line, pos);
@@ -729,6 +805,21 @@ struct JSONDict : map<string, JSONVal>
         pos -= 1;
         pos_first_char = pos; // pos_first_char is updated with the pos of the last char
         return number;
+    }
+
+    vector<vector<vector<JSONVal>>> GetNestedVector2(const string &line, size_t &pos_first_bracket)
+    {
+        vector<vector<vector<JSONVal>>> nestedVec;
+        size_t pos = pos_first_bracket + 1;
+        
+        while(line[pos] != ']')
+        {
+            nestedVec.push_back( GetNestedVector(line, pos) );
+            pos += 1; // Get the pos just after the inner vector. Could be ']' on the outer vector, or ','
+            if (line[pos] == ',') { pos += 2; } // If it is ',', add 2 to skip the space after the comma and land on '[' of the next inner vector
+        }
+        pos_first_bracket = pos; // Update pos_first_bracket to be at the position of ']' of the outer vector
+        return nestedVec;
     }
 
     vector<vector<JSONVal>> GetNestedVector(const string &line, size_t &pos_first_bracket)

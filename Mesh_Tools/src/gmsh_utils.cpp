@@ -597,13 +597,27 @@ int getPhysicalGroup(int &physGroupTag, const string side, const int dim, std::v
     else if (side == "right") { physGroupTag = gmsh::model::addPhysicalGroup(dim, right_tags); return 2; }
     else if (side == "bottom") { physGroupTag = gmsh::model::addPhysicalGroup(dim, bottom_tags); return 3; }
     else if (side == "left") { physGroupTag = gmsh::model::addPhysicalGroup(dim, left_tags); return 4; }
-    else
-    {
-        std::cout << "CRITICAL ERROR: gmsh_utils.cpp: getPhysicalGroup(): Provided side, " << side << ", unidentified." << std::endl;
-        return -100;
-    }
+    else { std::cout << "gmsh_utils.cpp: getPhysicalGroup(): CRITICAL ERROR: Provided side, " << side << ", unidentified." << std::endl; exit(1); }
 }
+int getPhysicalGroups(std::vector<int> &PGs, const string &side, const int dim, std::vector<int> &top_tags,
+    std::vector<int> &right_tags, std::vector<int> &bottom_tags, std::vector<int> &left_tags)
+{
+    // Initiate variables
+    std::vector<int> *tags; int return_int = 0;
 
+    // Point 'tags' to the correct set of tags
+    if (side == "none") { return return_int; }
+    else if (side == "top") { tags = &top_tags; return_int = 1; }
+    else if (side == "right") { tags = &right_tags; return_int = 2; }
+    else if (side == "bottom") { tags = &bottom_tags; return_int = 3; }
+    else if (side == "left") { tags = &left_tags; return_int = 4; }
+    else { std::cout << "gmsh_utils.cpp: getPhysicalGroup(): CRITICAL ERROR: Provided side, " << side << ", unidentified." << std::endl; exit(1); }
+    
+    // Create a physical group for each tag
+    for (int i = 0; i < tags->size(); i++) { PGs.push_back( gmsh::model::addPhysicalGroup(dim, {(*tags)[i]}) ); }
+
+    return return_int;
+}
 
 
 
@@ -1732,14 +1746,14 @@ void getDomainBoundaryLineTags(const std::vector<std::vector<int>> &ln_tags_in_A
     std::vector<std::vector<int>> &AR_tags_neighbors, double L_x, double L_y, double tol)
 {
     bool verbose = false;
-    int tag;
     std::vector<int> top_ln_tags, right_ln_tags, bottom_ln_tags, left_ln_tags, unused_ln_tags;
     std::vector<int> top_AR_tags, right_AR_tags, bottom_AR_tags, left_AR_tags;
     
+    int count = 0;
     for (int i_ar = 0; i_ar < ln_tags_in_AR.size(); i_ar++) {
         for (int i_ln = 0; i_ln < ln_tags_in_AR[i_ar].size(); i_ln++) {
             
-            tag = ln_tags_in_AR[i_ar][i_ln];
+            int tag = ln_tags_in_AR[i_ar][i_ln];
         
             // Check if the line lies on the inlet (i.e., the left-most side of the domain).
             if (isCoincides(tag, 0, -L_x/2, tol)) { left_ln_tags.push_back( tag ); left_AR_tags.push_back( ARs[i_ar].second ); if (verbose) std::cout << "Added curve " << tag << " to the left lines vector." << std::endl; }
@@ -1748,12 +1762,17 @@ void getDomainBoundaryLineTags(const std::vector<std::vector<int>> &ln_tags_in_A
             // Check if the line lies on the top boundary
             else if (isCoincides(tag, 1, L_y/2, tol)) { top_ln_tags.push_back( tag ); top_AR_tags.push_back( ARs[i_ar].second ); if (verbose) std::cout << "Added curve " << tag << " to the top lines vector." << std::endl; }
             // Check if the line lies on the bottom boundary
-            else if (isCoincides(tag, 1, -L_y/2, tol)) { bottom_ln_tags.push_back( tag ); bottom_AR_tags.push_back( ARs[i_ar].second ); if (verbose) std::cout << "Added curve " << tag << " to the bottom lines vector." << std::endl; }
+            else if (isCoincides(tag, 1, -L_y/2, tol)) {
+                bottom_ln_tags.push_back( tag );
+                bottom_AR_tags.push_back( ARs[i_ar].second ); if (verbose) std::cout << "Added curve " << tag << " to the bottom lines vector." << std::endl;
+                //std::vector<std::vector<double>> ln_coords = getLineCoords(tag);
+                //cout << "New line: pt1: " << ln_coords[0][0] << " " << ln_coords[0][1] << "   pt2: " << ln_coords[1][0] << " " << ln_coords[1][1] << endl;
+            }
             // If none of the previous, put it in the unused tags. These are the cut geometry line tags.
             else { unused_ln_tags.push_back( tag ); if (verbose) std::cout << "Added curve " << tag << " to the unused lines vector." << std::endl; }
         }
     }
-
+    
     domain_boundary_tags.push_back( top_ln_tags );
     domain_boundary_tags.push_back( right_ln_tags );
     domain_boundary_tags.push_back( bottom_ln_tags );
@@ -1815,3 +1834,463 @@ void getDomainBoundarySurfaceTags(const std::vector<std::vector<int>> &surf_tags
     AR_tags_neighbors.push_back( front_AR_tags );
     AR_tags_neighbors.push_back( back_AR_tags );
 }
+
+
+
+
+
+
+
+
+
+
+// ========================================
+// Functions for separating averaging region lines from cut geometry lines 
+// ========================================
+// Get the neighboring ARs for each AR (this includes diagonal neighbors; the code looks for any AR that share a point/line(and /surface for 3D) with other AR)
+void getNeighboringARTags(const std::vector<std::vector<int>> &AR_tags_toBeMerged,
+    const std::vector<int> &AR_PGs, std::vector<std::vector<int>> &AR_PG_neighbors, int is3D)
+{
+    // Go through the AR_tags_toBeMerged, which provides the final number of AR (AR_tags_toBeMerged.size()) and the surface/volume tags that will be merged in each AR
+    std::vector<std::vector<int>> AR_PG_gpts; // size is AR_tags_toBeMerged.size()
+    getPointTagsFromEntity(AR_tags_toBeMerged, AR_PG_gpts, is3D);
+    
+    // Now, go through each set of points and see if there is any overlap between them. If there is, the ARs are neighbors
+    AR_PG_neighbors.clear();
+    AR_PG_neighbors.resize(AR_PG_gpts.size());
+    for (int i_ar = 0; i_ar < AR_PG_gpts.size(); i_ar++) {
+        cout << "\r    getNeighboringARTags(): Finding neighbors of AR  i_ar = " << i_ar << "/" << AR_PG_gpts.size() - 1 << "." << std::flush;
+        
+        // Compare the gmsh points tags of i_ar against those of i_ar2
+        for (int i_ar2 = 0; i_ar2 < AR_PG_gpts.size(); i_ar2++) {
+            // Skip if it is the same AR
+            if (i_ar2 == i_ar) { continue; }
+            // Combine the points tags of i_ar and i_ar2 into a single vector
+            std::vector<int> pts_vec = AR_PG_gpts[i_ar];
+            std::vector<int> &pts_vec2 = AR_PG_gpts[i_ar2];
+            pts_vec.insert(pts_vec.end(), pts_vec2.begin(), pts_vec2.end());
+            // Sort the vector and determine if there are any repeats with std::unique()
+            std::sort(pts_vec.begin(), pts_vec.end());
+            auto last_dum = std::unique(pts_vec.begin(), pts_vec.end());
+            // If there are repeats (i.e., last_dum != pts_vec.end()), add the AR tag
+            if (last_dum != pts_vec.end()) { AR_PG_neighbors[i_ar].push_back( AR_PGs[i_ar2] ); }
+        }
+
+        // Report if the AR does not have any AR neighbors
+        if (AR_PG_neighbors[i_ar].size() == 0) {
+            cout << endl;
+            cout << "\r    getNeighboringARTags(): WARNING: AR " << i_ar << " does not have any neighboring AR! The code can continue, but it might be important to note this for your simulation." << endl;
+        }
+    }
+    cout << endl;
+}
+
+void getPointTagsFromEntity(const std::vector<std::vector<int>> &AR_tags_toBeMerged, std::vector<std::vector<int>> &AR_PG_gpts, int is3D)
+{
+    // Go through the AR_tags_toBeMerged, which provides the final number of AR (AR_tags_toBeMerged.size()) and the surface/volume tags that will be merged in each AR
+    AR_PG_gpts.clear(); AR_PG_gpts.resize(AR_tags_toBeMerged.size());
+    for (int i_ar = 0; i_ar < AR_tags_toBeMerged.size(); i_ar++) {
+        cout << "\r    getPointTagsFromEntity(): Getting gmsh point tags from AR  i_ar = " << i_ar << "/" << AR_tags_toBeMerged.size() - 1 << "." << std::flush;
+
+        // Create a reference for the AR gpts
+        std::vector<int> &pts_vec = AR_PG_gpts[i_ar];
+        
+        // Go through the tags in the AR group and collect the gmsh point tags
+        for (int i_tag = 0; i_tag < AR_tags_toBeMerged[i_ar].size(); i_tag++) {
+            std::vector<std::pair<int, int>> gpts;
+            gmsh::model::getBoundary({{2 + is3D, AR_tags_toBeMerged[i_ar][i_tag]}}, gpts, false, false, true);
+            for (int i_pt = 0; i_pt < gpts.size(); i_pt++) { pts_vec.push_back( gpts[i_pt].second ); }
+        }
+
+        // Remove duplicates
+        std::sort(pts_vec.begin(), pts_vec.end());
+        auto last_dum = std::unique(pts_vec.begin(), pts_vec.end());
+        pts_vec.erase(last_dum, pts_vec.end());
+    }
+    cout << endl;
+}
+
+
+
+void getMacroIDToCoords(std::vector<std::vector<int>> &macroID_to_coords)
+{
+    macroID_to_coords = {{0, 0, 0},  {0, 1, 0},  {1, 1, 0},  {1, 0, 0},  {1, -1, 0},  {0, -1, 0},  {-1, -1, 0},  {-1, 0, 0},  {-1, 1, 0},
+                         {0, 0, 1},  {0, 1, 1},  {1, 1, 1},  {1, 0, 1},  {1, -1, 1},  {0, -1, 1},  {-1, -1, 1},  {-1, 0, 1},  {-1, 1, 1},
+                         {0, 0, -1}, {0, 1, -1}, {1, 1, -1}, {1, 0, -1}, {1, -1, -1}, {0, -1, -1}, {-1, -1, -1}, {-1, 0, -1}, {-1, 1, -1}};
+}
+
+int getMacroID(std::vector<int> periodic_dims, const std::vector<double> &trans_coords)
+{
+    std::vector<int> macroIDs_X = {7, 3}, macroIDs_Y = {5, 1}, macroIDs_Z = {18, 9};
+    std::vector<std::vector<int>> macroIDs_1dim = {macroIDs_X, macroIDs_Y, macroIDs_Z};
+    
+    std::vector<int> macroIDs_XY = {6, 4, 8, 2}, macroIDs_XZ = {25, 21, 16, 12}, macroIDs_YZ = {23, 19, 14, 10};
+    std::vector<std::vector<int>> macroIDs_2dim = {macroIDs_XY, macroIDs_XZ, macroIDs_YZ};
+    
+    std::vector<int> macroIDs_XYZ = {24, 22, 26, 20, 15, 13, 17, 11};
+
+    int macroID = -1;
+
+    if (periodic_dims.size() == 1)
+    {
+        int ind = periodic_dims[0];
+        if (trans_coords[ind] > 0.0) { macroID = macroIDs_1dim[ind][0]; }
+        else { macroID = macroIDs_1dim[ind][1]; }
+    }
+    else if (periodic_dims.size() == 2)
+    {
+        assert (periodic_dims[0] != periodic_dims[1]);
+        int ind = periodic_dims[0] + periodic_dims[1] - 1;
+        std::sort(periodic_dims.begin(), periodic_dims.end());
+        if (trans_coords[periodic_dims[0]] > 0.0 && trans_coords[periodic_dims[1]] > 0.0) { macroID = macroIDs_2dim[ind][0]; }
+        else if (trans_coords[periodic_dims[0]] < 0.0 && trans_coords[periodic_dims[1]] > 0.0) { macroID = macroIDs_2dim[ind][1]; }
+        else if (trans_coords[periodic_dims[0]] > 0.0 && trans_coords[periodic_dims[1]] < 0.0) { macroID = macroIDs_2dim[ind][2]; }
+        else if (trans_coords[periodic_dims[0]] < 0.0 && trans_coords[periodic_dims[1]] < 0.0) { macroID = macroIDs_2dim[ind][3]; }
+    }
+    else if (periodic_dims.size() == 3)
+    {
+        assert (periodic_dims[0] != periodic_dims[1] && periodic_dims[0] != periodic_dims[2] && periodic_dims[1] != periodic_dims[2]);
+        if (trans_coords[0] > 0.0 && trans_coords[1] > 0.0 && trans_coords[2] > 0.0) { macroID = macroIDs_XYZ[0]; }
+        else if (trans_coords[0] < 0.0 && trans_coords[1] > 0.0 && trans_coords[2] > 0.0) { macroID = macroIDs_XYZ[1]; }
+        else if (trans_coords[0] > 0.0 && trans_coords[1] < 0.0 && trans_coords[2] > 0.0) { macroID = macroIDs_XYZ[2]; }
+        else if (trans_coords[0] < 0.0 && trans_coords[1] < 0.0 && trans_coords[2] > 0.0) { macroID = macroIDs_XYZ[3]; }
+        else if (trans_coords[0] > 0.0 && trans_coords[1] > 0.0 && trans_coords[2] < 0.0) { macroID = macroIDs_XYZ[4]; }
+        else if (trans_coords[0] < 0.0 && trans_coords[1] > 0.0 && trans_coords[2] < 0.0) { macroID = macroIDs_XYZ[5]; }
+        else if (trans_coords[0] > 0.0 && trans_coords[1] < 0.0 && trans_coords[2] < 0.0) { macroID = macroIDs_XYZ[6]; }
+        else if (trans_coords[0] < 0.0 && trans_coords[1] < 0.0 && trans_coords[2] < 0.0) { macroID = macroIDs_XYZ[7]; }
+    }
+
+    return macroID;
+} 
+
+void getNeighboringARTags(const std::vector<std::vector<int>> &AR_tags_toBeMerged, const std::vector<int> &AR_PGs,
+    std::vector<std::vector<int>> &AR_PG_neighbors, std::vector<std::vector<int>> &AR_PG_neighbor_macroIDs,
+    int is3D, const std::vector<std::vector<int>> &boundary_AR_PGs, const std::vector<int> &isPeriodic,
+    const std::vector<double> &L)
+{
+    // First, call the getNeighboringARTags that does not consider periodicity
+    getNeighboringARTags(AR_tags_toBeMerged, AR_PGs, AR_PG_neighbors, is3D);
+
+    // Give each neighboring AR entry a marco ID of 0
+    //
+    // What is a Macro ID? Consider a square (or cube) domain with geometry inside. If this domain were placed contiguously in space
+    // (in 2D or 3D), AR PGs touching the edges of the original domain would neighbor AR PGs on the opposite side of the domain.
+    // Macro IDs tell you which edge(s) of the domain the neighboring AR PGs are across. Every neighboring AR PG is assigned a
+    // macro ID. The macro IDs are as follows:
+    //
+    //              2D Macro ID Notation                    3D Macro ID Notation
+    //
+    //                                                                    Back                              Front                      (Back is same pattern with continued numbering, ending at 26)
+    //                                             |                  ___________
+    //       *----------*----------*----------*    |                /___/___/___/|            *----------*----------*----------*
+    //       |          |          |          |    |               /_X_/_X_/_X_/ |            |          |          |          |
+    //       |  ID = 8  |  ID = 1  |  ID = 2  |    |              /___/___/___/  |            |  ID = 17 |  ID = 10 |  ID = 11 |
+    //       |          |          |          |    |              |___|___|___|  /            |          |          |          |
+    //       *----------*----------*----------*    |       Front  |___|___|___| /             *----------*----------*----------*
+    //       |          |  ID = 0  |          |    |              |___|___|___|/              |          |          |          |
+    //       |  ID = 7  |  (orig   |  ID = 3  |    |                                          |  ID = 16 |  ID = 9  |  ID = 12 |
+    //       |          |  domain) |          |    |    X's indicate 2D notation.             |          |          |          |
+    //       *----------*----------*----------*    |    Front and back are same pattern.      *----------*----------*----------*
+    //       |          |          |          |    |                                          |          |          |          |
+    //       |  ID = 6  |  ID = 5  |  ID = 4  |    |                                          |  ID = 15 |  ID = 14 |  ID = 13 |
+    //       |          |          |          |    |                                          |          |          |          |
+    //       *----------*----------*----------*    |                                          *----------*----------*----------*
+    //                                             |
+    //
+
+    // Give each neighboring AR entry a marco ID of 0
+    AR_PG_neighbor_macroIDs.clear();
+    AR_PG_neighbor_macroIDs.resize(AR_PG_neighbors.size());
+    for (int i = 0; i < AR_PG_neighbor_macroIDs.size(); i++) {
+        AR_PG_neighbor_macroIDs[i].resize(AR_PG_neighbors[i].size());
+        for (int j = 0; j < AR_PG_neighbor_macroIDs[i].size(); j++) { AR_PG_neighbor_macroIDs[i][j] = 0; }
+    }
+    
+
+    // Create AR_PG_gpts, which has the gmsh point tags for each AR PG (i.e., {{points for PG 0}, {points for PG 1}})
+    std::vector<std::vector<int>> AR_PG_gpts;
+    getPointTagsFromEntity(AR_tags_toBeMerged, AR_PG_gpts, is3D);
+    
+    // Create a map from AR_PG -> index (index for AR_tags_toBeMerged, AR_PGs, AR_PG_neighbors, etc.)
+    std::map<int, int> AR_PGs_inv; for (int i = 0; i < AR_PGs.size(); i++) { AR_PGs_inv[AR_PGs[i]] = i; }
+
+    
+    // For each AR in the vectors of boundary_AR_PGs, we need to see if there are points that would be shared with ARs on the opposite side of the domain.
+    // NOTE: Our method only works if the domain is truely periodic (i.e., the geometry perfectly lines up so that points on opposite sides of the domain coincide---within a given tolerance)
+    // NOTE: Our method assumes that boundary_AR_PGs = {{AR touching top, AR touching right, AR touching bottom, AR touching left, AR touching front, AR touching back}} (for 3D; disregard last 2 for 2D)
+    assert (boundary_AR_PGs.size() <= 6);
+
+
+    // Get the point coordinates of AR PGs on each domain boundary
+    std::vector<std::vector<std::vector<std::vector<double>>>> AR_PG_coords(boundary_AR_PGs.size());
+    for (int i_side = 0; i_side < boundary_AR_PGs.size(); i_side++) {
+        // Get the boundary coord index and coordinate value to look for based on the side being considered
+        int i_side_coord; double boundary_coord;
+        if (i_side == 0) { i_side_coord = 1; boundary_coord = L[1] / 2.0; } else if (i_side == 1) { i_side_coord = 0; boundary_coord = L[0] / 2.0; }
+        else if (i_side == 2) { i_side_coord = 1; boundary_coord = -L[1] / 2.0; } else if (i_side == 3) { i_side_coord = 0; boundary_coord = -L[0] / 2.0; }
+        else if (i_side == 4) { i_side_coord = 2; boundary_coord = L[2] / 2.0; } else if (i_side == 5) { i_side_coord = 2; boundary_coord = -L[2] / 2.0; }
+
+        // Only get the coordinates if periodicity is on for the dimension
+        if (isPeriodic[i_side_coord] == 1)
+        {
+            // Get the coordinates of points that compare with the i_side_coord and boundary_coord
+            for (int i_PG = 0; i_PG < boundary_AR_PGs[i_side].size(); i_PG++) {
+                AR_PG_coords[i_side].push_back( std::vector<std::vector<double>>() );
+                std::vector<int> &pt_tags = AR_PG_gpts[ AR_PGs_inv[boundary_AR_PGs[i_side][i_PG]] ];
+                std::vector<double> pt_para_coords, pt_coords_dummy;
+                for (int i_pt = 0; i_pt < pt_tags.size(); i_pt++) {
+                    gmsh::model::getValue(0, pt_tags[i_pt], pt_para_coords, pt_coords_dummy);
+                    if (compareValues(pt_coords_dummy[i_side_coord], boundary_coord)) { AR_PG_coords[i_side][i_PG].push_back(pt_coords_dummy); }
+                }
+            }
+        }
+    }
+    
+
+    // 
+    std::vector<std::vector<int>> AR_PG_periodic_neighbors(AR_PG_neighbors.size());
+    std::vector<std::vector<int>> AR_PG_periodic_neighbor_macroIDs(AR_PG_neighbor_macroIDs.size());
+    for (int i_side = 0; i_side < AR_PG_coords.size(); i_side++) {
+        // Get the boundary coord index to consider and index of the opposite side of the domain based on the side being considered
+        int i_side_coord, i_opp, macroID;
+        if (i_side == 0) { i_side_coord = 1; i_opp = 2; macroID = 1; } else if (i_side == 1) { i_side_coord = 0; i_opp = 3; macroID = 3; }
+        else if (i_side == 2) { i_side_coord = 1; i_opp = 0; macroID = 5; } else if (i_side == 3) { i_side_coord = 0; i_opp = 1; macroID = 7; }
+        else if (i_side == 4) { i_side_coord = 2; i_opp = 5; macroID = 9; } else if (i_side == 5) { i_side_coord = 2; i_opp = 4; macroID = 18; }
+
+        // If there are multiple dimensions that are periodic, get the indices for those dimensions 
+        std::vector<int> i_other_periodic_sides;
+        for (int i_dim = 0; i_dim < isPeriodic.size(); i_dim++) {
+            if (isPeriodic[i_dim] == 1 && i_side_coord != i_dim) { i_other_periodic_sides.push_back(i_dim); }
+        }
+
+        for (int i_PG = 0; i_PG < AR_PG_coords[i_side].size(); i_PG++) {
+            for (int i_pt = 0; i_pt < AR_PG_coords[i_side][i_PG].size(); i_pt++) {
+                // For each coordinate, we need to find the match in the opposite side
+                
+                // Create the point that is translated across the domain in the periodic direction
+                std::vector<std::vector<double>> trans_coords;
+                std::vector<int> potential_marcoID;
+                trans_coords.push_back( AR_PG_coords[i_side][i_PG][i_pt] ); trans_coords[0][i_side_coord] *= -1.0;
+                potential_marcoID.push_back( getMacroID({i_side_coord}, trans_coords[0]) );
+                
+                // If the domain is periodic in multiple directions, create the point that is translated across the domain in 2 periodic directions (i.e., the corner points in 2D; corner lines in 3D)
+                for (int i = 0; i < i_other_periodic_sides.size(); i++) {
+                    if (std::abs(trans_coords[0][i_other_periodic_sides[i]]) == L[i_other_periodic_sides[i]] / 2.0) {
+                        trans_coords.push_back( trans_coords[0] );
+                        trans_coords[trans_coords.size() - 1][i_other_periodic_sides[i]] *= -1.0;
+                        potential_marcoID.push_back( getMacroID({i_side_coord, i_other_periodic_sides[i]}, trans_coords[trans_coords.size() - 1]) );
+                    }
+                }
+                // If the domain is periodic in all 3 directions, create the point that is translated across the domain in all 3 periodic directions (this gets corner points in 3D)
+                if (i_other_periodic_sides.size() == 2) {
+                    if (std::abs(trans_coords[0][i_other_periodic_sides[0]]) == L[i_other_periodic_sides[0]] / 2.0 &&
+                        std::abs(trans_coords[0][i_other_periodic_sides[1]]) == L[i_other_periodic_sides[1]] / 2.0) {
+                            trans_coords.push_back( trans_coords[0] );
+                            for (int i = 0; i < i_other_periodic_sides.size(); i++) { trans_coords[trans_coords.size() - 1][i_other_periodic_sides[i]] *= -1.0; }
+                            potential_marcoID.push_back( getMacroID({i_side_coord, i_other_periodic_sides[0], i_other_periodic_sides[1]}, trans_coords[trans_coords.size() - 1]) );
+                    }
+                }
+                
+                bool foundMatch = false;
+                for (int i_PG2 = 0; i_PG2 < AR_PG_coords[i_opp].size(); i_PG2++) {
+                    for (int i_pt2 = 0; i_pt2 < AR_PG_coords[i_opp][i_PG2].size(); i_pt2++) {
+                        bool matchesTranslatedPoint = false;
+                        for (int i_Tpt = 0; i_Tpt < trans_coords.size(); i_Tpt++) {
+                            if (compareVectors(trans_coords[i_Tpt], AR_PG_coords[i_opp][i_PG2][i_pt2])) {
+                                AR_PG_periodic_neighbors[ AR_PGs_inv[boundary_AR_PGs[i_side][i_PG]] ].push_back( boundary_AR_PGs[i_opp][i_PG2] );
+                                AR_PG_periodic_neighbor_macroIDs[ AR_PGs_inv[boundary_AR_PGs[i_side][i_PG]] ].push_back( potential_marcoID[i_Tpt] );
+                                foundMatch = true; matchesTranslatedPoint = true; break;
+                            }
+                        }
+                        if (matchesTranslatedPoint) { break; }
+                    }
+                }
+                if (!foundMatch) { cout << "getNeighboringARTags(): CRITICAL ERROR: unable to find coinciding points on opposite sides of the 'periodic' domain. Tolerance could be too low, or the domain is not actually periodic." << endl; exit(1); }
+            }
+        }
+    }
+    
+    
+
+    for (int i = 0; i < AR_PG_periodic_neighbors.size(); i++) {
+        std::vector<std::pair<int, int>> AR_PG_macroID_pairs(AR_PG_periodic_neighbors[i].size());
+        for (int j = 0; j < AR_PG_macroID_pairs.size(); j++) {
+            AR_PG_macroID_pairs[j] = {AR_PG_periodic_neighbors[i][j], AR_PG_periodic_neighbor_macroIDs[i][j]};
+        }
+
+        // Erase the duplicates from AR_PG_periodic_neighbors
+        //std::sort(AR_PG_periodic_neighbors[i].begin(), AR_PG_periodic_neighbors[i].end());
+        //auto last = std::unique(AR_PG_periodic_neighbors[i].begin(), AR_PG_periodic_neighbors[i].end());
+        //AR_PG_periodic_neighbors[i].erase(last, AR_PG_periodic_neighbors[i].end());
+        std::sort(AR_PG_macroID_pairs.begin(), AR_PG_macroID_pairs.end(),
+            [](const std::pair<int, int> &a, const std::pair<int, int> &b) {
+                if (a.first == b.first) { assert (a.second == b.second); }
+                return a.first < b.first;
+            });
+        auto last = std::unique(AR_PG_macroID_pairs.begin(), AR_PG_macroID_pairs.end());
+        AR_PG_macroID_pairs.erase(last, AR_PG_macroID_pairs.end());
+
+        // Combine AR_PG_periodic_neighbors to AR_PG_neighbors
+        //AR_PG_neighbors[i].insert(AR_PG_neighbors[i].end(), AR_PG_periodic_neighbors[i].begin(), AR_PG_periodic_neighbors[i].end());
+        
+        for (int j = 0; j < AR_PG_macroID_pairs.size(); j++) {
+            AR_PG_neighbors[i].push_back( AR_PG_macroID_pairs[j].first );
+            AR_PG_neighbor_macroIDs[i].push_back( AR_PG_macroID_pairs[j].second );
+        }
+        
+        //AR_PG_neighbors[i].insert(AR_PG_neighbors[i].end(), AR_PG_periodic_neighbors[i].begin(), AR_PG_periodic_neighbors[i].end());
+    }
+}
+
+
+
+
+
+
+
+
+
+// ========================================
+// Function for copying and translating the AR physical groups 
+// ========================================
+/*
+// NOTES: Copies and translates the entities of each AR PG individually; very slow. Better to copy and translate all geometry at once,
+// keep track of which entities belong to which ARs, and then define the new PGs. The function below does this.
+//
+void CopyAndTranslatePGGeometry(const std::vector<int> &AR_PGs, const std::vector<double> &translation, std::vector<int> &new_AR_PGs, int dim, bool useOCC)
+{
+    // Make sure the provided translation has a translation for x, y, and z
+    assert (translation.size() == 3);
+
+    std::vector<std::vector<int>> AR_PG_entityTags_periodic(AR_PGs.size());
+    for (int i_AR = 0; i_AR < AR_PGs.size(); i_AR++) {
+        cout << "\r    CopyAndTranslatePGGeometry(): Copying physical group " << i_AR + 1 << " / " << AR_PGs.size() << std::flush;
+        // Get the gmsh entity tags of each AR physical group (due to the AR merging, there could be multiple gmsh surface/volume tags for each physical group)
+        std::vector<int> entityTags; gmsh::model::getEntitiesForPhysicalGroup(dim, AR_PGs[i_AR], entityTags);
+        
+        // Create a vector of dimTags, dimtags_to_copy, of the entities to be copied/translated
+        std::vector<std::pair<int, int>> dimtags_to_copy; for (int i = 0; i < entityTags.size(); i++) { dimtags_to_copy.push_back( {dim, entityTags[i]} ); }
+        
+        // Copy and translate the AR entities
+        std::vector<std::pair<int, int>> copied_dimtags;
+        if (useOCC) {
+            gmsh::model::occ::copy(dimtags_to_copy, copied_dimtags);
+            gmsh::model::occ::translate(copied_dimtags, translation[0], translation[1], translation[2]);
+            gmsh::model::occ::synchronize();
+        } else {
+            gmsh::model::geo::copy(dimtags_to_copy, copied_dimtags);
+            gmsh::model::geo::translate(copied_dimtags, translation[0], translation[1], translation[2]);
+            gmsh::model::geo::synchronize();
+        }
+        
+        // Store the copied entity tags for making the physical groups later
+        for (int i = 0; i < copied_dimtags.size(); i++) { AR_PG_entityTags_periodic[i_AR].push_back( copied_dimtags[i].second ); }
+    }
+    cout << endl;
+
+    // Make the new AR physical groups from the dimTags of the entities that were copied/translated
+    new_AR_PGs.clear();
+    for (int i_AR = 0; i_AR < AR_PG_entityTags_periodic.size(); i_AR++) { new_AR_PGs.push_back( gmsh::model::addPhysicalGroup(dim, AR_PG_entityTags_periodic[i_AR]) ); }
+
+    // Synchronize the physical groups
+    if (useOCC) { gmsh::model::occ::synchronize(); } else { gmsh::model::geo::synchronize(); }
+}
+*/
+void CopyAndTranslatePGGeometry(const std::vector<int> &AR_PGs, const std::vector<double> &translation, std::vector<int> &new_AR_PGs, int dim, bool useOCC)
+{
+    // Make sure the provided translation has a translation for x, y, and z
+    assert (translation.size() == 3);
+
+    // Initialize variables
+    int N_PG = AR_PGs.size();
+    std::vector<std::vector<int>> AR_PG_entityTags_periodic(N_PG);
+    std::vector<std::pair<int, int>> dimtags_to_copy;
+    std::vector<int> entities_in_AR;
+
+    // Get the gmsh entity tags of each AR physical group (due to the AR merging, there could be multiple gmsh surface/volume tags for each physical group)
+    for (int i_AR = 0; i_AR < N_PG; i_AR++) {
+        // Get the entities for hte AR physical group
+        std::vector<int> entityTags; gmsh::model::getEntitiesForPhysicalGroup(dim, AR_PGs[i_AR], entityTags);
+        
+        // Create a vector of dimTags, dimtags_to_copy, of the entities to be copied/translated
+        for (int i = 0; i < entityTags.size(); i++) { dimtags_to_copy.push_back( {dim, entityTags[i]} ); }
+
+        // Save the number of entities per AR so that physical groups can be defined later
+        entities_in_AR.push_back( entityTags.size() );
+    }
+        
+    // Copy and translate the AR entities
+    std::vector<std::pair<int, int>> copied_dimtags;
+    if (useOCC) {
+        gmsh::model::occ::copy(dimtags_to_copy, copied_dimtags);
+        gmsh::model::occ::translate(copied_dimtags, translation[0], translation[1], translation[2]);
+        gmsh::model::occ::synchronize();
+    } else {
+        gmsh::model::geo::copy(dimtags_to_copy, copied_dimtags);
+        gmsh::model::geo::translate(copied_dimtags, translation[0], translation[1], translation[2]);
+        gmsh::model::geo::synchronize();
+    }
+        
+    // Go through the copied dimtags and create physical groups according to how many entities were previous counted for each AR PG
+    new_AR_PGs.clear();
+    int count = 0;
+    for (int i_AR = 0; i_AR < N_PG; i_AR++) {
+        cout << "\r    CopyAndTranslatePGGeometry(): Creating physical group " << i_AR + 1 << " / " << AR_PGs.size() << std::flush;
+        
+        // Get the copied entities
+        std::vector<int> AR_ent_tags(entities_in_AR[i_AR]);
+        for (int i_ent = 0; i_ent < entities_in_AR[i_AR]; i_ent++) { AR_ent_tags[i_ent] = copied_dimtags[count + i_ent].second; }
+        
+        // Create the new physical group
+        new_AR_PGs.push_back( gmsh::model::addPhysicalGroup(dim, AR_ent_tags) );
+
+        // Increase the count
+        count += entities_in_AR[i_AR];
+    }
+    cout << endl;
+
+    // Synchronize the physical groups
+    if (useOCC) { gmsh::model::occ::synchronize(); } else { gmsh::model::geo::synchronize(); }
+}
+void CopyAndTranslatePGGeometry(const std::vector<int> &AR_PGs, const std::vector<double> &translation, int &new_AR_PG, int dim, bool useOCC)
+{
+    // Make sure the provided translation has a translation for x, y, and z
+    assert (translation.size() == 3);
+
+    std::vector<int> AR_PG_entityTags_periodic;
+    std::vector<std::pair<int, int>> dimtags_to_copy; 
+    for (int i_AR = 0; i_AR < AR_PGs.size(); i_AR++) {
+        // Get the gmsh entity tags of each AR physical group (due to the AR merging, there could be multiple gmsh surface/volume tags for each physical group)
+        std::vector<int> entityTags; gmsh::model::getEntitiesForPhysicalGroup(dim, AR_PGs[i_AR], entityTags);
+        
+        // Create a vector of dimTags, dimtags_to_copy, of the entities to be copied/translated
+        for (int i = 0; i < entityTags.size(); i++) { dimtags_to_copy.push_back( {dim, entityTags[i]} ); }
+    }
+        
+    // Copy and translate the AR entities
+    std::vector<std::pair<int, int>> copied_dimtags;
+    if (useOCC) {
+        gmsh::model::occ::copy(dimtags_to_copy, copied_dimtags);
+        gmsh::model::occ::translate(copied_dimtags, translation[0], translation[1], translation[2]);
+        gmsh::model::occ::synchronize();
+    } else {
+        gmsh::model::geo::copy(dimtags_to_copy, copied_dimtags);
+        gmsh::model::geo::translate(copied_dimtags, translation[0], translation[1], translation[2]);
+        gmsh::model::geo::synchronize();
+    }
+        
+    // Store the copied entity tags for making the physical groups later
+    for (int i = 0; i < copied_dimtags.size(); i++) { AR_PG_entityTags_periodic.push_back( copied_dimtags[i].second ); }
+    
+    // Make the new AR physical groups from the dimTags of the entities that were copied/translated
+    new_AR_PG = gmsh::model::addPhysicalGroup(dim, AR_PG_entityTags_periodic);
+    
+    // Synchronize the physical groups
+    if (useOCC) { gmsh::model::occ::synchronize(); } else { gmsh::model::geo::synchronize(); }
+}
+
+
+
+
+
+

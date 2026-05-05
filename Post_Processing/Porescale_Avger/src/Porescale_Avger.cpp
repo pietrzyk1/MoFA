@@ -153,7 +153,7 @@ int main(int argc, char *argv[])
     MeshManager mesh_manager(mesh_file_path);
     
     // Make the mesh periodic if required by isPeriodic
-    mesh_manager.MakePeriodic(isPeriodic, globalVars.L);
+    //mesh_manager.MakePeriodicMesh(isPeriodic, globalVars.L, true);
     
     // Get a pointer to the mesh being used
     Mesh *mesh = mesh_manager.GetMesh();
@@ -213,7 +213,21 @@ int main(int argc, char *argv[])
         // Load the previous porescale solution through the GridFunctionCoefficientManager
         string output_file_path = output_dir + output_file_name_prefix + to_string(i_sol) + output_file_name_suffix; // + ".serial";
         GridFunctionManager sol_manager(output_file_path, mesh);
-        GridFunction* gf = sol_manager.GetGridFunction();
+        GridFunction *gf = sol_manager.GetGridFunction();
+
+        // ======== For Debugging ========
+        /*
+        if (i_sol == 1) {
+            gf->Save("fluid_velocity_verification_plot.gf");
+            ostringstream mesh_name; mesh_name << "fluid_velocity_verification_mesh.mesh";
+            ofstream mesh_ofs((mesh_name.str()).c_str());
+            mesh_ofs.precision(8);
+            mesh->Print(mesh_ofs);
+            exit(1);
+        }
+        */
+        // ===============================
+        
 
 
         // --------------------------------------------------------

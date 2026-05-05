@@ -13,7 +13,7 @@ lL.lH.*/
 
 //                                      Mesh Scaler
 // Description: This code is used to create a pore-scale mesh, and a file for it's
-//              corresponding information from an upscaled mesh. Generally speaking,
+//              corresponding information, from an upscaled mesh. Generally speaking,
 //              this means this code essentially scales the upscaled mesh information
 //              to get the pore-scale mesh and information so that a separate
 //              pore-scale mesh does not need to be created.
@@ -68,6 +68,7 @@ int main(int argc, char **argv)
 
     int is3D = 0; // If the domain is 3D, = 1. If 2D, = 0
     double scale = 1.0;
+    std::vector<int> N_macroDomains = {1, 1, 1};
 
     string problem_type = "porescale";
     
@@ -110,6 +111,9 @@ int main(int argc, char **argv)
 
         sub_dict = *mesh_dict["AR"];
         sub_dict.getValue("epsilon", scale);
+        
+        sub_dict = *mesh_dict["juxtaposed unit-cells info"];
+        sub_dict.getValue("N_macroDomains", N_macroDomains);
         
         sub_dict = *mesh_dict["output path"];
         sub_dict.getValue("directory", orig_mesh_dir);
@@ -200,6 +204,10 @@ int main(int argc, char **argv)
     // Load the mesh information
     JSONDict mesh_info; mesh_info.loadFromFile(orig_mesh_info_file_path);
 
+    // Get whether the mesh is a juxtaposed mesh or not. If so, we will need to add more areas, etc., for the additional AR
+    int isJuxtaposedMesh = 0; mesh_info.getValue("juxtaposed", isJuxtaposedMesh);
+    assert (N_macroDomains.size() == 3);
+    int N_macroDomains_total = N_macroDomains[0] * N_macroDomains[1] * N_macroDomains[2];
     
     // Get the AR dictionary from the mesh information
     JSONDict AR_dict = *mesh_info["AR"];
@@ -212,7 +220,12 @@ int main(int argc, char **argv)
             if (is3D) { pore_areas[i] *= scale*scale*scale; }
             else { pore_areas[i] *= scale*scale; }
         }
-        AR_dict["pore_areas"] = pore_areas;
+        if (isJuxtaposedMesh) {
+            std::vector<double> pore_areas_total;
+            for (int i = 0; i < N_macroDomains_total; i++) { pore_areas_total.insert(pore_areas_total.end(), pore_areas.begin(), pore_areas.end()); }
+            AR_dict["pore_areas"] = pore_areas_total;
+        }
+        else { AR_dict["pore_areas"] = pore_areas; }
     }
 
     // Get the total areas from the mesh information, scale them, and reassign them
@@ -223,7 +236,21 @@ int main(int argc, char **argv)
             if (is3D) { total_areas[i] *= scale*scale*scale; }
             else { total_areas[i] *= scale*scale; }
         }
-        AR_dict["total_areas"] = total_areas;
+        if (isJuxtaposedMesh) {
+            std::vector<double> total_areas_total;
+            for (int i = 0; i < N_macroDomains_total; i++) { total_areas_total.insert(total_areas_total.end(), total_areas.begin(), total_areas.end()); }
+            AR_dict["total_areas"] = total_areas_total;
+        }
+        else { AR_dict["total_areas"] = total_areas; }
+    }
+
+    // If it's the juxtaposed mesh, set 'tags' equal to 'macrodomain tags', and adjust the total number of AR
+    if (isJuxtaposedMesh) {
+        std::vector<int> tags; AR_dict.getValue("macrodomain tags", tags);
+        AR_dict["tags"] = tags;
+        int N_AR; AR_dict.getValue("total_number", N_AR);
+        N_AR *= N_macroDomains_total;
+        AR_dict["total_number"] = N_AR;
     }
 
     // Reassign the AR dictionary into the mesh info dictionary
@@ -237,7 +264,7 @@ int main(int argc, char **argv)
     {
         std::vector<double> L;
         lengths_dict.getValue("L", L);
-        for (int i = 0; i < L.size(); i++) { L[i] *= scale; }
+        for (int i = 0; i < L.size(); i++) { L[i] *= scale; if (isJuxtaposedMesh) { L[i] *= N_macroDomains[i]; } }
         lengths_dict["L"] = L;
     }
 
@@ -261,6 +288,15 @@ int main(int argc, char **argv)
 
     // Reassign the simulation_info dictionary into the mesh info dictionary
     mesh_info["simulation_info"] = &sim_info_dict;
+
+
+    // Get the stokes dictionary from the mesh information, reassign the no-slip tags to the macro no-slip tags if it's a juxtaposed mesh
+    JSONDict stokes_dict = *mesh_info["stokes"];
+    if (isJuxtaposedMesh) {
+        std::vector<int> noslip_tags = stokes_dict["macro noslip1"];
+        stokes_dict["noslip1"] = noslip_tags;
+        mesh_info["stokes"] = &stokes_dict;
+    }
 
 
     // Save the mesh information

@@ -15,6 +15,41 @@ lL.lH.*/
 #include <iostream>
 #include "mfem.hpp"
 #include "JSON_IO.h"
+/*
+#if __has_include( "mfem_util_STAGED.h" )
+#   include "mfem_util_STAGED.h"
+constexpr bool genResFormAvailable = true;
+#else
+constexpr bool genResFormAvailable = false;
+class GeneralizedResidualManager
+{
+public:
+    constexpr GeneralizedResidualManager() {};
+    GeneralizedResidualManager(double alpha_, double beta_, double gamma_);
+    void SetParams(double alpha_, double beta_, double gamma_);
+    constexpr void ConstructParamVecs(int N_AR_global, const vector<int> &AR_inds_loc2glob) {};
+    constexpr void ConstructParamVecs(int N_AR_global, const vector<int> &AR_inds_loc2glob, bool test) {};
+    constexpr void ImplementAlpha(BilinearForm *&varf) {};
+    constexpr void ImplementBeta(SparseMatrix &cavg) {};
+    constexpr void ImplementGamma(SparseMatrix &BM_avgavg, const vector<int> &AR_inds_loc2glob) {};
+    void AlterGammaVec(const vector<int> &AR_tags, const vector<vector<int>> &AR_neighbors, int active_AR_global, int procedureID = -1);
+    static constexpr vector<double>* GetParamVec(const char* param_name) { return nullptr; };
+    bool LoadParamDicts(JSONDict &eq_dict);
+    void ImplementGeneralizedResidual(vector<double> &temp, vector<string> keys, int N_AR, bool isKMat = false);
+    void ImplementGeneralizedResidual(vector<double> &temp, vector<int> &AR_inds, vector<string> keys, bool isKMat = false);
+    void CreateTransform(JSONDict &closure_residuals_dict, vector<double> &porosities, int N_AR, double epsilon, double omega);
+    void CreateTransformSpMat(JSONDict &closure_residuals_dict, vector<double> &porosities, int N_AR, double epsilon, double omega);
+    void ModifyTransform(vector<double> &temp, vector<int> &AR_inds, vector<string> keys, bool addOne = false);
+    void ModifyTransform(vector<double> &temp, vector<string> keys, bool addOne = false);
+    void ApplyTransform(vector<vector<double>> &avg_sol, const Vector &temp_sols, int N_AR, double fip1, double fi, double dt);
+    void ApplyTransformSpMat(vector<vector<double>> &avg_sol, const Vector &temp_sols, int N_AR, double fip1, double fi, double dt);
+    bool GetUseGenResForm();
+    SparseMatrix* GetTransform();
+    Vector GetTransf();
+    Vector GetTransdfdt();
+};
+#endif
+*/
 
 
 
@@ -114,18 +149,27 @@ public:
     class ParEnforcedSolsUpdateRHSOperator
     {
     protected:
-        const Array<int> attr_marker;
+        Array<int> attr_marker, tdof_list;
         
-        HypreParMatrix *BC_elim = nullptr;
+        HypreParMatrix *BC_elim = nullptr, *varf_mat = nullptr;
+
 
         bool isOperatorSet = false;
         
     public:
         // Class constructors
-        ParEnforcedSolsUpdateRHSOperator(const Array<int> &attr_marker_) : attr_marker(attr_marker_) {}
+        ParEnforcedSolsUpdateRHSOperator(const Array<int> &attr_marker_) : attr_marker(attr_marker_)
+        {
+            cerr << "mfem_util.h: ParEnforcedSolsUpdateRHSOperator(): CRITICAL ERROR: Constructor is obsolete." << endl;
+            exit(1);
+        }
+        ParEnforcedSolsUpdateRHSOperator(const ParFiniteElementSpace &fespace, const Array<int> &attr_marker_) : attr_marker(attr_marker_)
+        {
+            fespace.GetEssentialTrueDofs(attr_marker, tdof_list);
+        }
 
         // Function set the values of BC_mat (the operator) from a BilinearForm
-        void SetOperator(HypreParMatrix &varf_mat, ParBilinearForm &varf);
+        void SetOperator(HypreParMatrix &varf_mat_, ParBilinearForm &varf);
         
         // Function that takes in the solution vector and b vector (i.e., RHS) and updates b reflect the effects of the temporal BC
         void UpdateLinearFormVector(const Vector &x, Vector &b);
@@ -1047,6 +1091,7 @@ public:
 // Function for projecting an average solution vector onto a GridFunction. We assume the
 // GridFunction has a pore-scale finite element space.
 void CreateAvgSolGridFunction(const Vector &sol, GridFunction &u, const string avg_area_type);
+void CreateAvgSolGridFunction(const Vector &sol, GridFunction &u, const string avg_area_type, const vector<int> &AR_tags);
 
 
 
@@ -1062,7 +1107,7 @@ class ResultsSaver
 {
 private:
     int N_residual_sets = 0;
-    string solve_mode = "serial";
+    string solve_mode = "serial"; // so far only used for printing residuals to the consol; no procedural changes
     
     string sim_key = "default_sim_key";
     string AR_number = "";
@@ -1075,10 +1120,11 @@ private:
     void VerifyVectorSize(int vecSize) { if (N_residual_sets == 0) { N_residual_sets = vecSize; } else { assert (vecSize == N_residual_sets); } }
 
     vector<vector<vector<double>>> residuals, alphas, betas, gammas;
+    vector<vector<vector<int>>> AR_inds, AR_macroIDs;
 
     JSONDict residual_dict, time_func_dict, iter_dict;
-    vector<JSONDict> eq_dicts, res_dicts, CFN_dicts, alpha_dicts, beta_dicts, gamma_dicts;
-    vector<vector<JSONDict>> comp_dicts, alpha_comp_dicts, beta_comp_dicts, gamma_comp_dicts;
+    vector<JSONDict> eq_dicts, res_dicts, CFN_dicts, alpha_dicts, beta_dicts, gamma_dicts, AR_inds_dicts, AR_macroIDs_dicts;
+    vector<vector<JSONDict>> comp_dicts, alpha_comp_dicts, beta_comp_dicts, gamma_comp_dicts, AR_inds_comp_dicts, AR_macroIDs_comp_dicts;
     bool initializedJSONDicts = false;
 
 public:
@@ -1118,22 +1164,36 @@ public:
     // dictionaries, compiling them into a main residual dictionary, and saving that dictionary
     // as a text file
     void SaveResidualDictionary(const string &residual_output_file_path);
+    //void SaveResidualDictionary2(const string &residual_output_file_path);
+
 
     // Function for filling component dictionaries (i.e., either residuals, alphas, betas, gammas, etc.)
     void FillComponentDictionary(vector<vector<JSONDict>> &dicts, vector<vector<vector<double>>> &val);
+    void FillComponentDictionary(vector<vector<JSONDict>> &dicts, vector<vector<vector<int>>> &val);
     // Function for filling parameter dictionaries (i.e., either res_dicts, alpha_dicts, beta_dicts, gamma_dicts, etc.)
     void FillParamDictionary(vector<JSONDict> &dicts, vector<vector<JSONDict>> &val);
 
     // Function for filling the residual parameters' dictionaries
     void StoreResidualParameters(const string &param_name, const vector<vector<vector<double>>> &param);
+    void StoreResidualParameters(const string &param_name, const vector<vector<vector<int>>> &param);
     void StoreResidualParameters(const string &param_name, const vector<vector<double>> &param, int N_AR);
-    void StoreResidualParameters(const string &param_name, const vector<vector<double>> &param, int N_AR, const vector<int> AR_inds);
+    void StoreResidualParameters(const string &param_name, const vector<vector<double>> &param, int N_AR, const vector<int> AR_inds_);
 
     
     // Function for loading the closure residuals/closure file names from a preexisting residual
     // results file into the dictionaries for appending the new closure residuals
     void LoadPreexistingResidualsFile(const string &residual_output_file_path);
 };
+
+
+
+
+
+// ===============================================================
+//   Declare function for determining the macro ID from a
+//   previous and current AR macro ID.
+// ===============================================================
+int DetermineMacroID(int crrnt_macroID, int prev_macroID, const vector<vector<int>> &macroIDCoordsKey);
 
 
 
@@ -1147,27 +1207,27 @@ public:
 class MeshManager
 {
 private:
-    std::shared_ptr<Mesh> parent_mesh, mesh;
+    std::shared_ptr<Mesh> parent_mesh, periodic_mesh, mesh;
     std::shared_ptr<SubMesh> local_mesh;
 
     vector<Vector> translations = {};
 
-    vector<int> AR_tags_local;
+    vector<int> AR_tags_local, AR_macroIDs_local;
     vector<int> AR_inds_loc2glob;
     int N_AR_local = -1;
     vector<int> central_AR_inds_local;
 
-    bool usingLocalMesh;
+    bool usingLocalMesh, usingPeriodicMesh;
 
     #ifdef MPI_BUILD
-        std::shared_ptr<ParMesh> par_mesh;
+        std::shared_ptr<ParMesh> par_mesh, parent_par_mesh;
         int* partitioning;
     #endif
 
 public:
     // Constructor methods
     MeshManager(string mesh_file_path)
-        : parent_mesh(std::make_shared<Mesh>(mesh_file_path)) {
+        : parent_mesh(std::make_shared<Mesh>(mesh_file_path, 0, 0, true)) {
             UseParentMesh();
         }
     
@@ -1177,22 +1237,33 @@ public:
 
     // Function for making the mesh periodic (if isPeriodic calls for it). Note, this function creates a new Mesh object that is periodic and deletes the original
     void MakePeriodic(const vector<int> &isPeriodic, const vector<double> &L);
+    int MakePeriodicMesh(const vector<int> &isPeriodic, const vector<double> &L, bool usePeriodicMesh = false);
 
     // Function for creating a "local" mesh around a specified AR index from the "parent" mesh in the class (in variable "mesh")
     void MakeLocalMesh(vector<int> central_AR_inds, int N_neighbor_layers, const vector<int> &AR_tags, const vector<vector<int>> &AR_neighbors);
+    void MakeLocalMesh(const vector<int> &central_AR_inds, int N_neighbor_layers, const vector<int> &AR_tags,
+        const vector<vector<int>> &AR_neighbors, const vector<vector<int>> &AR_neighbors_macroIDs,
+        const vector<vector<int>> &macroIDCoordsKey, vector<int> isPeriodic_ = {1, 1, 1});
+
+    // Function for determining the macro ID of a neighboring AR based on the macro ID of the AR that touches it
+    //int DetermineMacroID(int crrnt_macroID, int prev_macroID, const vector<vector<int>> &macroIDCoordsKey);
     
     // Function for clearing and reassigning variable "mesh" to the object pointed at by "parent_mesh"
     void UseParentMesh();
 
-    // Function for clearing the "parent_mesh" (because it can be expensive)
-    void DeleteParentMesh();
+    // Function for clearing and reassigning variable "mesh" to the object pointed at by "periodic_mesh"
+    void UsePeriodicMesh();
 
     // Function for clearing and reassigning variable "mesh" to the object pointed at by "local_mesh", but as a Mesh object, not a SubMesh object
     void UseLocalMesh();
 
+    // Function for clearing the "parent_mesh" (because it can be expensive)
+    void DeleteParentMesh();
+
 
     // Functions for providing raw pointers to the "mesh" and "local_mesh" variables
     Mesh* GetParentMesh() { return parent_mesh.get(); }
+    Mesh* GetPeriodicMesh() { return periodic_mesh.get(); }
     Mesh* GetMesh() { return mesh.get(); }
     SubMesh* GetLocalMesh() { return local_mesh.get(); }
     
@@ -1201,6 +1272,7 @@ public:
     vector<Vector> get_translations() { return translations; }
     int get_N_AR_local() { return N_AR_local; }
     vector<int> get_AR_kept() { return AR_tags_local; }
+    vector<int> get_AR_macroIDs() { return AR_macroIDs_local; }
     vector<int> get_AR_inds_loc2glob() { return AR_inds_loc2glob; }
     vector<int> get_central_AR_inds_local() { return central_AR_inds_local; }
 
@@ -1215,6 +1287,7 @@ public:
 
         // Function for providing a raw pointer to the "mesh" variable
         ParMesh* GetParMesh() { return par_mesh.get(); }
+        ParMesh* GetParentParMesh() { if (usingPeriodicMesh) { return parent_par_mesh.get(); } return par_mesh.get(); }
         int* GetPartitioning() { return partitioning; }
     #endif
 };
@@ -1268,11 +1341,13 @@ public:
     GridFunctionManager(string &gf_file_path, string gf_mesh_file_path, double gf_scale = 1.0)
     {
         // Load in the mesh for the grid function
-        gf_mesh = new Mesh(gf_mesh_file_path);
+        gf_mesh = new Mesh(gf_mesh_file_path, 0, 0, true);
         manage_gf_mesh = true;
         LoadGridFunction(gf_file_path, gf_mesh);
         ScaleGridFunction(gf_scale);
     }
+
+    void ProjectGridFunction(GridFunction &u);
     
 
     // Function for loading a grid function from a file with path "gf_file_path" onto a mesh with file path "gfc_mesh_file_path"
@@ -1405,3 +1480,9 @@ public:
     #endif
 };
 
+
+
+
+
+// Function for printing matrices as grid functions/on a mesh to see the sparsity patterns
+void PrintMatrixSparsityAsGridFunction(SparseMatrix &mat);

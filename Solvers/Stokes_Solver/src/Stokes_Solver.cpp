@@ -57,7 +57,6 @@ struct Params
     string FILENAME = "Stokes_Solver.cpp";
     vector<double> L = {1., 1., 0.};
     double u_inlet_max = 1.0;
-    string sim_type = "";
 };
 static Params globalVars; 
 
@@ -96,10 +95,8 @@ int main(int argc, char *argv[])
     // ===============================================================
     //   Search for config file path in argv (i.e., command line options) 
     // ===============================================================
-    for (int i = 1; i < argc; i++)
-    {
-        if ((string(argv[i]) == "-C" || string(argv[i]) == "--config_path") && i + 1 < argc)
-        {
+    for (int i = 1; i < argc; i++) {
+        if ((string(argv[i]) == "-C" || string(argv[i]) == "--config_path") && i + 1 < argc) {
             config_path = argv[i + 1];
             cout << globalVars.FILENAME << ": Configuration path obtained from parser options: " << config_path << endl;
             break;
@@ -167,33 +164,37 @@ int main(int argc, char *argv[])
     args.AddOption(&A_coef_val, "-A", "--A_coef", "Value of the dimensionless number A.");
     args.ParseCheck();
 
-    // Get mesh info and load the necessary details
-    JSONDict mesh_info;
-    mesh_info.loadFromFile(mesh_info_dir + mesh_info_file_name);
-    globalVars.L = (*mesh_info["geometry"])["L"];
-    
-    JSONDict sub_dict = *mesh_info["simulation_info"];
-    sub_dict.getValue("problem_type", globalVars.sim_type);
     
     // Define variables based on inputs
     string u_output_path = output_dir + u_output_file_name;
     string p_output_path = output_dir + p_output_file_name;
-    string mesh_output_path = output_dir + mesh_output_file_name; //output_dir + globalVars.sim_type + "_mesh.mesh";
+    string mesh_output_path = output_dir + mesh_output_file_name;
     if (p_order != u_order - 1) { p_order = u_order - 1; }
     
     
     // ===============================================================
-    //   Get the mesh and setup periodicity.
+    //   Get the mesh info, mesh, and setup periodicity.
     // ===============================================================
-    // Use the provided mesh file path to define the mesh 
+    // Get mesh info and load the necessary details
+    JSONDict mesh_info; mesh_info.loadFromFile(mesh_info_dir + mesh_info_file_name);
+    
+    // Get the domain lengths, L
+    globalVars.L = (*mesh_info["geometry"])["L"];
+
+    // Get the physical groups (or tags) for the inlet and no slip boundaries
+    vector<int> inlet_PGs = (*mesh_info["stokes"])["inlet1"];
+    vector<int> no_slip_PGs = (*mesh_info["stokes"])["noslip1"];
+
+
+    // Use the provided mesh file path to define the mesh
     MeshManager mesh_manager(mesh_dir + mesh_file_name);
     
     // Make the mesh periodic if required by isPeriodic
-    mesh_manager.MakePeriodic(isPeriodic, globalVars.L);
+    mesh_manager.MakePeriodicMesh(isPeriodic, globalVars.L, true);
     
     // Get a pointer to the mesh being used
     Mesh *mesh = mesh_manager.GetMesh();
-
+    
     
     // ===============================================================
     //   Define finite element spaces for the velocity and pressure on the mesh.
@@ -219,12 +220,17 @@ int main(int argc, char *argv[])
     // Here, we are defining two marker arrays to mark 1.) the inlet, and 2.) the surfaces where the no-slip BC is applied.
     Array<int> marker_inlet_BC(mesh->bdr_attributes.Max()); // Define a marker array for the inlet BC.
     marker_inlet_BC = 0; // Initialize marker array to "don't apply any essential BC".
-    if (useInlet == 1) { marker_inlet_BC[(int)(*mesh_info["stokes"])["inlet1"] - 1] = 1; } // Set the first bdr attr group (i.e., physical group defined as 1 in gmsh file) as being the inlet.
+    if (useInlet == 1) {
+        // Set the first bdr attr group (i.e., physical group defined as 1 in gmsh file) as being the inlet.
+        for (int i_BCin = 0; i_BCin < inlet_PGs.size(); i_BCin++) { marker_inlet_BC[inlet_PGs[i_BCin] - 1] = 1; }
+        //marker_inlet_BC[(int)(*mesh_info["stokes"])["inlet1"] - 1] = 1;
+    }
     VectorFunctionCoefficient inlet_BC(mesh->SpaceDimension(), u_inlet_func); // Define a function coefficient that will apply "u_inlet_func", which varies in space.
     
     Array<int> marker_no_slip_BC(mesh->bdr_attributes.Max()); // Define a marker array for the no-slip BC.
     marker_no_slip_BC = 0; // Initialize marker array to "don't apply any essential BC".
-    marker_no_slip_BC[(int)(*mesh_info["stokes"])["noslip1"] - 1] = 1; // Set the third bdr attr group (i.e., physical group defined as 3 in gmsh file) as being the no-slip condition.
+    for (int i_BCns = 0; i_BCns < no_slip_PGs.size(); i_BCns++) { marker_no_slip_BC[no_slip_PGs[i_BCns] - 1] = 1; } // Set the third bdr attr group (i.e., physical group defined as 3 in gmsh file) as being the no-slip condition.
+    //marker_no_slip_BC[(int)(*mesh_info["stokes"])["noslip1"] - 1] = 1;
     VectorFunctionCoefficient no_slip_BC(mesh->SpaceDimension(), u_no_slip_func); // Define a function coefficient that will apply "u_inlet_func", which varies in space.
 
 
@@ -370,19 +376,33 @@ int main(int argc, char *argv[])
     // ===============================================================
     //   Extract and save the solutions and mesh.
     // ===============================================================
+    // Save the velocity as a vector field, and the pressure as a scalar field. We first project these solutions to
+    // non-periodic meshes to make them compatible with other codes that might use these fields in their computations
+    
+    // Declare gridfunctions on the potentially periodic FEspaces, and make them references to the solutions
     GridFunction u_sol(fespace_u), p_sol(fespace_p);
-    
-    // Save the velocity as a vector field 
     u_sol.MakeRef(fespace_u, sol_up_BLK.GetBlock(0), 0); // In GLVis, you can use "u" to cycle through x- and y-components
-    u_sol.Save(u_output_path.c_str());
-    // You can save vector fields by components, but if you save the vector field (like above), you can view the components by pressing "u"
-    
-    // Save the pressure field
     p_sol.MakeRef(fespace_p, sol_up_BLK.GetBlock(1), 0);
-    p_sol.Save(p_output_path.c_str());
 
-    // Save the mesh
-    mesh->Save(mesh_output_path.c_str());
+    // Create FEspaces and gridfunctions on the non-periodic mesh, and project the solutions onto these gridfunctions
+    std::unique_ptr<FiniteElementCollection> fec_u_nnprdc = std::make_unique<H1_FECollection>(u_order, mesh_manager.GetParentMesh()->Dimension());
+    std::unique_ptr<FiniteElementSpace> fespace_u_nnprdc = std::make_unique<FiniteElementSpace>(mesh_manager.GetParentMesh(), fec_u_nnprdc.get(), mesh_manager.GetParentMesh()->Dimension());
+    GridFunction u_sol_nnprdc(fespace_u_nnprdc.get()); u_sol_nnprdc.ProjectGridFunction(u_sol);
+    
+    std::unique_ptr<FiniteElementCollection> fec_p_nnprdc = std::make_unique<H1_FECollection>(p_order, mesh_manager.GetParentMesh()->Dimension());
+    std::unique_ptr<FiniteElementSpace> fespace_p_nnprdc = std::make_unique<FiniteElementSpace>(mesh_manager.GetParentMesh(), fec_p_nnprdc.get(), 1);
+    GridFunction p_sol_nnprdc(fespace_p_nnprdc.get()); p_sol_nnprdc.ProjectGridFunction(p_sol);
+    
+    // Save the velocity and pressure fields
+    u_sol_nnprdc.Save(u_output_path.c_str());
+    p_sol_nnprdc.Save(p_output_path.c_str());
+
+    // Save the non-periodic mesh
+    //mesh->Save(mesh_output_path.c_str());
+    // Another potential way to save:
+    ofstream mesh_ofs(mesh_output_path);
+    mesh_ofs.precision(8);
+    mesh_manager.GetParentMesh()->Print(mesh_ofs);
 
 
     // ===============================================================
