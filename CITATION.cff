@@ -1,10 +1,24 @@
 cff-version: 1.2.0
-message: "If you use the provided software, please cite it as follows."
+message: "If you use the provided software, please cite it using the metadata below."
+title: "The Method of Finite Averages (MoFA)"
 authors:
   - family-names: "Pietrzyk"
     given-names: "Kyle"
     affiliation: "Lawrence Livermore National Laboratory (LLNL)"
-title: "The Method of Finite Averages"
 doi: "10.11578/dc.20250925.5"
 url: "https://github.com/pietrzyk1/MoFA"
+repository-code: "https://github.com/pietrzyk1/MoFA"
 license: "BSD-3-Clause"
+abstract: >-
+  Code related to the implementation and validation of The Method of Finite Averages (MoFA), a rigorous upscaling methodology for modeling physical phenomena in heterogeneous porous media.
+keywords:
+  - upscaling
+  - heterogeneous media
+  - MFEM
+identifiers:
+  - type: doi
+    value: "10.11578/dc.20250925.5"
+    description: "DOE CODE / OSTI software DOI"
+  - type: other
+    value: "LLNL-CODE-2006961"
+    description: "LLNL release number"
