@@ -1,5 +1,11 @@
 # The Method of Finite Averages (MoFA)
 
+[![DOI](https://img.shields.io/badge/DOI-10.11578%2Fdc.20250925.5-blue)](https://doi.org/10.11578/dc.20250925.5)
+[![DOE CODE](https://img.shields.io/badge/DOE%20CODE-165260-blue)](https://www.osti.gov/doecode/biblio/165260)
+[![OSTI](https://img.shields.io/badge/OSTI-code--165260-blue)](https://www.osti.gov/biblio/code-165260)
+[![License](https://img.shields.io/badge/License-BSD--3--Clause-green)](https://github.com/pietrzyk1/MoFA/blob/main/LICENSE)
+[![CITATION.cff](https://img.shields.io/badge/citation-CITATION.cff-yellowgreen)](https://github.com/pietrzyk1/MoFA/blob/main/CITATION.cff)
+
 
 
 ### Description :sparkles:
@@ -250,5 +256,3 @@ and modify the JSON-like input/configuration files ```MoFA_config.txt``` and ```
 MoFA is distributed under the terms of the BSD-3 license. All new contributions must be made under this license. See [LICENSE](LICENSE) and [NOTICE](NOTICE) for details.
 
 LLNL Release Number:   LLNL-CODE-2006961
-
-[![DOI](https://shields.io)](https://doi.org) [![License](https://shields.io)](https://opensource.org)
