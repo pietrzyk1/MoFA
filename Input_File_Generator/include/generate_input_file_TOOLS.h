@@ -306,7 +306,10 @@ istringstream createTransportPorescaleDict(const string &project_dir,
 
     JSONDict porescaleDict_avg_output_path;
     porescaleDict_avg_output_path["directory"] = project_dir + "output/avg_porescale_solution/"; // The average porescale solution output directory
-    porescaleDict_avg_output_path["file name"] = "avg_sol.txt"; // The average porescale solution output file name
+    //porescaleDict_avg_output_path["file name"] = "avg_sol.txt"; // The average porescale solution output file name
+    porescaleDict_avg_output_path["file name prefix"] = "c_avg_"; // The average porescale solution output file name prefix
+    porescaleDict_avg_output_path["file name suffix"] = ".gf"; // The average porescale solution output file name suffix
+    porescaleDict_avg_output_path["avg mesh file name"] = "avg_porescale_mesh.mesh"; // The file name of the average porescale mesh
     porescaleDict["average output path"] = &porescaleDict_avg_output_path;
 
     JSONDict porescaleDict_mesh_output;
@@ -348,12 +351,15 @@ istringstream createErrorDict(const string &project_dir, string sim_type)
     JSONDict errorDict_output;
     errorDict_output["directory"] = project_dir + "output/absolute_error/"; // The absolute error output directory
     errorDict_output["file name"] = "abs_error.txt"; // The absolute error output file name
+    errorDict_output["file name prefix"] = "c_avg_error_"; // The prefix for the absolute error gridfunction output file
+    errorDict_output["file name suffix"] = ".gf"; // The suffix for the absolute error gridfunction output file
+    errorDict_output["mesh file name"] = "error_mesh.mesh"; // The output mesh file name for the absolute error
     errorDict["output path"] = &errorDict_output;
 
     JSONDict errorDict_avgpore;
     if (sim_type == "transport") { errorDict_avgpore["directory"] = project_dir + "output/avg_porescale_solution/"; } // The directory where the average porescale solution is stored
     else { errorDict_avgpore["directory"] = project_dir + "output/avg_unsteady_stokes_solution/"; } // The directory where the average porescale solution is stored
-    errorDict_avgpore["file name"] = "avg_sol.txt"; // The average porescale solution file name
+    errorDict_avgpore["file name"] = "c_avg_.txt"; // The average porescale solution file name
     errorDict["avg porescale path"] = &errorDict_avgpore;
 
     JSONDict errorDict_upscaled;

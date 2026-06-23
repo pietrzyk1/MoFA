@@ -14,9 +14,16 @@ lL.lH.*/
 #include <vector>
 #include <string>
 #include <gmsh.h>
+#include <iomanip>
 #include <cassert>
 #include "gmsh_utils.h"
 #include "gmsh_import_STL.h"
+
+// OpenMP
+#ifdef USE_OPENMP
+    #include <omp.h>
+#endif
+
 
 
 
@@ -1076,6 +1083,51 @@ void getTriPointsFromSTL(const string &STL_file_path, const double &geo_scale,
     cout << FILE_NAME << ": getTriPointsFromSTL(): Complete!" << endl;
 }
 
+void getTrianglesFromSTL(const string &STL_file_path, const double &geo_scale,
+    std::vector<std::vector<std::vector<double>>> &tri_coords,
+    std::vector<std::vector<double>> &tri_normals, int &tri_count, std::vector<double> &min_max_x_y_z)
+{
+    // Create the file stream
+    ifstream file(STL_file_path);
+    if (!file) { cerr << FILE_NAME << ": getTrianglesFromSTL(): CRITICAL ERROR: Error opening STL file for reading. Check that the file path is correct." << endl; exit(1); }
+
+    // Read the file, obtain the points, and give initial line/surface IDs
+    cout << FILE_NAME << ": getTrianglesFromSTL(): Reading STL file..." << endl;
+    
+    // Initialize variables
+    tri_count = -1; string line; std::vector<std::vector<double>> tri_coords_dummy;
+
+    // Reset the minimum and maximum coordinate values
+    min_max_x_y_z.clear(); for (int i = 0; i < 6; i++) { min_max_x_y_z.push_back(0.0); }
+    
+    while (getline(file, line))
+    {
+        if (line.substr(0, 8) == "endsolid") { break; }
+        if (line.substr(0, 12) == "facet normal") {
+            tri_count += 1;
+            tri_normals.push_back( std::vector<double>() );
+            getCoordFromSTLLine(line, tri_normals[tri_count], 1.0, 12);
+        }
+        if (line == "endloop") {
+            tri_coords.push_back( tri_coords_dummy );
+            tri_coords_dummy.clear();
+        }
+        if (line.substr(0, 6) == "vertex") {
+            tri_coords_dummy.push_back( std::vector<double>() );
+            getCoordFromSTLLine(line, tri_coords_dummy[tri_coords_dummy.size() - 1], geo_scale);
+
+            if (tri_coords_dummy[tri_coords_dummy.size() - 1][0] < min_max_x_y_z[0]) { min_max_x_y_z[0] = tri_coords_dummy[tri_coords_dummy.size() - 1][0]; }
+            if (tri_coords_dummy[tri_coords_dummy.size() - 1][0] > min_max_x_y_z[1]) { min_max_x_y_z[1] = tri_coords_dummy[tri_coords_dummy.size() - 1][0]; }
+            if (tri_coords_dummy[tri_coords_dummy.size() - 1][1] < min_max_x_y_z[2]) { min_max_x_y_z[2] = tri_coords_dummy[tri_coords_dummy.size() - 1][1]; }
+            if (tri_coords_dummy[tri_coords_dummy.size() - 1][1] > min_max_x_y_z[3]) { min_max_x_y_z[3] = tri_coords_dummy[tri_coords_dummy.size() - 1][1]; }
+            if (tri_coords_dummy[tri_coords_dummy.size() - 1][2] < min_max_x_y_z[4]) { min_max_x_y_z[4] = tri_coords_dummy[tri_coords_dummy.size() - 1][2]; }
+            if (tri_coords_dummy[tri_coords_dummy.size() - 1][2] > min_max_x_y_z[5]) { min_max_x_y_z[5] = tri_coords_dummy[tri_coords_dummy.size() - 1][2]; }
+        }
+    }
+    tri_count += 1; // Add one more, since we started at -1 to make the ID start at 0
+    cout << FILE_NAME << ": getTriPointsFromSTL(): Complete!" << endl;
+}
+
 void getCoordFromSTLLine(const string &line, std::vector<double> &coord, const double &scale, const int pos)
 {
     size_t first_space = line.find(' ', pos);
@@ -1267,6 +1319,369 @@ int createCutVolumeFromSTL(const string &STL_file_path, const double &geo_scale)
 
     return STLCutVol;
 }
+
+
+
+
+
+
+
+
+
+// ========================================
+// Function for splitting a 3D, rectangular STL into 7 STL files: 1 for each side, and 1 for internal surfaces (primarily for homogenization closure problem simulations)
+// ========================================
+
+std::vector<std::pair<int, int>> splitRectangularSTL(const string &STL_file_dir, const string &STL_file_name, const double &geo_scale)
+{
+    // Define the function name
+    const string FUNCTION_NAME = "splitRectangularSTL()";
+    double tol = 1.0E-9;
+
+    // Get the point coordinates from the STL file. Assign preliminary line and surface/triangle information
+    cout << FILE_NAME << ": " << FUNCTION_NAME << ": Getting STL triangles from file..." << endl;
+    
+    std::vector<std::vector<std::vector<double>>> tri_coords;
+    std::vector<std::vector<double>> tri_normals;
+    int tri_count;
+    std::vector<double> min_max_x_y_z;
+    getTrianglesFromSTL(STL_file_dir + STL_file_name, geo_scale, tri_coords, tri_normals, tri_count, min_max_x_y_z);
+    
+    cout << FILE_NAME << ": " << FUNCTION_NAME << ": Complete!" << endl;
+
+
+    cout << FILE_NAME << ": " << FUNCTION_NAME << ": Sorting triangles into separate STL files..." << endl;
+    
+    std::vector<std::vector<std::vector<std::vector<double>>>> tri_coords_split;
+    std::vector<std::vector<double>> tri_coords_split2;
+    std::vector<std::vector<std::vector<double>>> tri_normals_split;
+    for (int i = 0; i < 7; i++) {
+        tri_coords_split.push_back( std::vector<std::vector<std::vector<double>>>() );
+        tri_coords_split2.push_back( std::vector<double>() );
+        tri_normals_split.push_back( std::vector<std::vector<double>>() );
+    }
+    
+    for (int i_tri = 0; i_tri < tri_coords.size(); i_tri++)
+    {
+        cout << "\r    Considering triangle i_tri = " << i_tri << "/" << tri_coords.size() - 1 << "." << std::flush;
+
+        bool lies_on_boundary;
+
+        lies_on_boundary = true;
+        for (int i_coords = 0; i_coords < tri_coords[i_tri].size(); i_coords++) {
+            if ( !compareValues(tri_coords[i_tri][i_coords][0], min_max_x_y_z[0], tol) ) { lies_on_boundary = false; break; } }
+        if ( lies_on_boundary ) {
+            tri_coords_split[0].push_back( tri_coords[i_tri] );
+            for (int i_n = 0; i_n < tri_coords[i_tri].size(); i_n++) {
+                tri_coords_split2[0].insert(tri_coords_split2[0].end(), tri_coords[i_tri][i_n].begin(), tri_coords[i_tri][i_n].end()); }
+            tri_normals_split[0].push_back( tri_normals[i_tri] );
+            continue;
+        }
+
+        lies_on_boundary = true;
+        for (int i_coords = 0; i_coords < tri_coords[i_tri].size(); i_coords++) {
+            if ( !compareValues(tri_coords[i_tri][i_coords][0], min_max_x_y_z[1], tol) ) { lies_on_boundary = false; break; } }
+        if ( lies_on_boundary ) {
+            tri_coords_split[1].push_back( tri_coords[i_tri] );
+            for (int i_n = 0; i_n < tri_coords[i_tri].size(); i_n++) {
+                tri_coords_split2[1].insert(tri_coords_split2[1].end(), tri_coords[i_tri][i_n].begin(), tri_coords[i_tri][i_n].end()); }
+            tri_normals_split[1].push_back( tri_normals[i_tri] );
+            continue;
+        }
+        
+        lies_on_boundary = true;
+        for (int i_coords = 0; i_coords < tri_coords[i_tri].size(); i_coords++) {
+            if ( !compareValues(tri_coords[i_tri][i_coords][1], min_max_x_y_z[2], tol) ) { lies_on_boundary = false; break; } }
+        if ( lies_on_boundary ) {
+            tri_coords_split[2].push_back( tri_coords[i_tri] );
+            for (int i_n = 0; i_n < tri_coords[i_tri].size(); i_n++) {
+                tri_coords_split2[2].insert(tri_coords_split2[2].end(), tri_coords[i_tri][i_n].begin(), tri_coords[i_tri][i_n].end()); }
+            tri_normals_split[2].push_back( tri_normals[i_tri] );
+            continue;
+        }
+
+        lies_on_boundary = true;
+        for (int i_coords = 0; i_coords < tri_coords[i_tri].size(); i_coords++) {
+            if ( !compareValues(tri_coords[i_tri][i_coords][1], min_max_x_y_z[3], tol) ) { lies_on_boundary = false; break; } }
+        if ( lies_on_boundary ) {
+            tri_coords_split[3].push_back( tri_coords[i_tri] );
+            for (int i_n = 0; i_n < tri_coords[i_tri].size(); i_n++) {
+                tri_coords_split2[3].insert(tri_coords_split2[3].end(), tri_coords[i_tri][i_n].begin(), tri_coords[i_tri][i_n].end()); }
+            tri_normals_split[3].push_back( tri_normals[i_tri] );
+            continue;
+        }
+
+        lies_on_boundary = true;
+        for (int i_coords = 0; i_coords < tri_coords[i_tri].size(); i_coords++) {
+            if ( !compareValues(tri_coords[i_tri][i_coords][2], min_max_x_y_z[4], tol) ) { lies_on_boundary = false; break; } }
+        if ( lies_on_boundary ) {
+            tri_coords_split[4].push_back( tri_coords[i_tri] );
+            for (int i_n = 0; i_n < tri_coords[i_tri].size(); i_n++) {
+                tri_coords_split2[4].insert(tri_coords_split2[4].end(), tri_coords[i_tri][i_n].begin(), tri_coords[i_tri][i_n].end()); }
+            tri_normals_split[4].push_back( tri_normals[i_tri] );
+            continue;
+        }
+
+        lies_on_boundary = true;
+        for (int i_coords = 0; i_coords < tri_coords[i_tri].size(); i_coords++) {
+            if ( !compareValues(tri_coords[i_tri][i_coords][2], min_max_x_y_z[5], tol) ) { lies_on_boundary = false; break; } }
+        if ( lies_on_boundary ) {
+            tri_coords_split[5].push_back( tri_coords[i_tri] );
+            for (int i_n = 0; i_n < tri_coords[i_tri].size(); i_n++) {
+                tri_coords_split2[5].insert(tri_coords_split2[5].end(), tri_coords[i_tri][i_n].begin(), tri_coords[i_tri][i_n].end()); }
+            tri_normals_split[5].push_back( tri_normals[i_tri] );
+            continue;
+        }
+
+        // If none, add to the internal STL file
+        tri_coords_split[6].push_back( tri_coords[i_tri] );
+        for (int i_n = 0; i_n < tri_coords[i_tri].size(); i_n++) {
+            tri_coords_split2[6].insert(tri_coords_split2[6].end(), tri_coords[i_tri][i_n].begin(), tri_coords[i_tri][i_n].end()); }
+        tri_normals_split[6].push_back( tri_normals[i_tri] );
+    }
+    cout << endl;
+
+    // Write the STL files
+    //std::vector<string> temp_STL_file_paths;
+    //for (int i = 0; i < tri_coords_split.size(); i++) {
+    //    temp_STL_file_paths.push_back(STL_file_dir + "splitRectangularSTL_temp_STL_" + to_string(i) + ".stl");
+    //    writeSTLFile(temp_STL_file_paths[i], tri_coords_split[i], tri_normals_split[i]);
+    //}
+
+    // Reload STL files and merge to create gmsh volume
+    //for (int i = 0; i < temp_STL_file_paths.size(); i++) {
+    //    gmsh::merge(temp_STL_file_paths[i]);
+    //}
+
+    size_t N_nodes = 1;
+    size_t N_elements = 1;
+    for (int i_surf = 0; i_surf < tri_coords_split.size(); i_surf++) {
+
+        cout << "\r    Considering surface i_surf = " << i_surf << "." << std::flush;
+
+        gmsh::model::addDiscreteEntity(2, i_surf + 1);
+
+        std::vector<size_t> nodeTags(tri_coords_split[i_surf].size() * 3);
+        for (int i = 0; i < nodeTags.size(); i++) { nodeTags[i] = i + 1; }
+
+        
+
+        gmsh::model::mesh::addNodes(2, i_surf + 1, nodeTags, tri_coords_split2[i_surf]);
+
+        std::vector<int> elementTypes(tri_coords_split[i_surf].size());
+        std::vector<std::vector<size_t>> elementTags;
+        std::vector<std::vector<size_t>> nodeTags2;
+        for (int i = 0; i < tri_coords_split[i_surf].size(); i++) {
+            elementTypes[i] = 2;
+            elementTags.push_back( {(size_t)i + 1} );
+            nodeTags2.push_back( { (size_t)(3*i + 1), (size_t)(3*i + 2), (size_t)(3*i + 3) } );
+        }
+        
+        gmsh::model::mesh::addElements(2, i_surf + 1, elementTypes, elementTags, nodeTags2);
+
+
+        /*
+        for (int i_tri = 0; i_tri < tri_coords_split[i_surf].size(); i_tri++) {
+            cout << "\r    Considering triangle i_tri = " << i_tri << "/" << tri_coords.size() - 1 << "." << std::flush;
+            for (int i_node = 0; i_node < tri_coords_split[i_surf][i_tri].size(); i_node++) {
+                gmsh::model::mesh::addNodes(2, i_surf + 1, {N_nodes}, tri_coords_split[i_surf][i_tri][i_node]);
+                N_nodes += 1;
+            }
+            gmsh::model::mesh::addElements(2, i_surf + 1, {2}, {{N_elements}}, {{N_nodes - 3, N_nodes - 2, N_nodes - 1}});
+            N_elements += 1;
+        }
+        */
+    }
+    cout << endl;
+
+    std::vector<std::pair<int, int>> vol;
+    return vol;
+
+}
+
+
+
+// ========================================
+// Function for writing an STL file given the triangle coordinates and surface normals
+// ========================================
+
+void writeSTLFile(const string &STL_file_path, const std::vector<std::vector<std::vector<double>>> tri_coords,
+    std::vector<std::vector<double>> tri_normals)
+{
+    string FUNCTION_NAME = "writeSTLFile()";
+
+    // Make sure there is the same number of triangles and normal vectors
+    assert (tri_coords.size() == tri_normals.size());
+    int N_tri = tri_coords.size();
+
+    // Create the ofstream (i.e., the output text file)
+    ofstream out_file(STL_file_path);
+    if(!out_file.is_open()) { cerr << FILE_NAME << ": " << FUNCTION_NAME << ": CRITICAL ERROR: Error creating text file for saving STL data. File path is: " << STL_file_path << endl; exit(1); }
+
+    
+    // Read the file, obtain the points, and give initial line/surface IDs
+    std::cout << FILE_NAME << ": " << FUNCTION_NAME << ": Writing STL file " << STL_file_path << endl;
+   
+    // Begin the file
+    out_file << "solid Exported from writeSTLFile\n";
+
+    for (int i_tri = 0; i_tri < N_tri; i_tri++)
+    {
+        // Make sure there are 3 components to the normal vector, then write it to the out file
+        assert (tri_normals[i_tri].size() == 3);
+        out_file << std::setprecision(17);
+        out_file << "facet normal " << tri_normals[i_tri][0] << " " << tri_normals[i_tri][1] << " " << tri_normals[i_tri][2] << "\n";
+
+        // Write the "outer loop"
+        out_file << "outer loop\n";
+
+        // Make sure there 3 vertices, then write them to the out file
+        assert (tri_coords[i_tri].size() == 3);
+        for (int i_v = 0; i_v < tri_coords[i_tri].size(); i_v++) {
+            out_file << std::setprecision(17);
+            out_file << "vertex " << tri_coords[i_tri][i_v][0] << " " << tri_coords[i_tri][i_v][1] << " " << tri_coords[i_tri][i_v][2] << "\n";
+        }
+
+        // End the "outer loop" and facet
+        out_file << "endloop\n";
+        out_file << "endfacet\n";
+    }
+
+    // End the file
+    out_file << "endsolid Exported from writeSTLFile\n";
+    out_file.close();
+}
+
+
+
+
+
+// ========================================
+// Function for changing the physical group and element entity numbers in a .msh file
+// ========================================
+
+void changeElementTags(const string msh_file_path, const string new_msh_file_path,
+    const std::vector<std::vector<size_t>> &elemTags_split, const std::vector<int> &new_pgs,
+    const std::vector<int> &new_elem_entities)
+{
+    string FUNCTION_NAME = "changeElementTags()";
+
+
+    cout << FILE_NAME << ": " << FUNCTION_NAME << ": Loading in .msh file..." << endl;
+    // Create the input file stream
+    ifstream file(msh_file_path);
+    if (!file) { cerr << FILE_NAME << ": " << FUNCTION_NAME << ": CRITICAL ERROR: Error opening .msh file for reading. File path is " << msh_file_path << endl; exit(1); }
+
+    // Read the file and put lines in different components of a vector of lines
+    std::vector<std::string> lines; std::string line; int line_count = 1;
+    while (std::getline(file, line)) { cout << "\r" << FILE_NAME << ": " << FUNCTION_NAME << ":    Reading line " << line_count << "." << std::flush; lines.push_back(line); line_count += 1; }
+    file.close();
+    cout << endl << FILE_NAME << ": " << FUNCTION_NAME << ":    Complete!" << endl;
+
+    
+    cout << FILE_NAME << ": " << FUNCTION_NAME << ": Creating map from element tag to new physical group/element entity tag..." << endl;
+    // Create a map from element tags to the physical group and element entity tags. Also count the number of elements identified in elemTags_split
+    std::unordered_map<int , std::array<int, 2>> elemTag_to_pgee; 
+    int N_elem = 0;
+    for (int i_s = 0; i_s < elemTags_split.size(); i_s++) {
+        for (int i_tag = 0; i_tag < elemTags_split[i_s].size(); i_tag++) {
+            elemTag_to_pgee[elemTags_split[i_s][i_tag]] = { new_pgs[i_s], new_elem_entities[i_s] };
+            N_elem += 1;
+        }
+    }
+    cout << FILE_NAME << ": " << FUNCTION_NAME << ":    Complete!" << endl;
+
+
+    cout << FILE_NAME << ": " << FUNCTION_NAME << ": Editing .msh file lines..." << endl;
+
+    bool start_reading_skip = false, activeReading = false; int elemCount = 1;
+    for (int i_line = 0; i_line < lines.size(); i_line++)
+    {
+        line = lines[i_line];
+        if (line.substr(0, 9) == "$Elements") { start_reading_skip = true; continue; }
+        if (start_reading_skip) { start_reading_skip = false; activeReading = true; continue; }
+        if (elemCount > N_elem) { break; }
+        if (activeReading)
+        {
+            elemCount += 1;
+            // Get the mesh element tag (i.e., the first number)
+            size_t mshElemTag_pos = 0;
+            size_t first_space = line.find(' ', mshElemTag_pos);
+            string mshElemTag_str = line.substr(mshElemTag_pos, first_space - mshElemTag_pos);
+            int mshElemTag = stoi( mshElemTag_str );
+
+            // Get the new physical group and element entity tag
+            int new_pg = elemTag_to_pgee[mshElemTag][0];
+            int new_ee = elemTag_to_pgee[mshElemTag][1];
+            
+            /*
+            // See which of the splits the element tag is in; then, get the new physical group and element entity tag
+            int new_pg = -1, new_ee = -1;
+            for (int i_s = 0; i_s < elemTags_split.size(); i_s++) {
+                std::vector<size_t> split_copy = elemTags_split[i_s]; split_copy.push_back(mshElemTag);
+                std::sort(split_copy.begin(), split_copy.end());
+                auto last = std::unique(split_copy.begin(), split_copy.end());
+                if (last != split_copy.end()) { new_pg = new_pgs[i_s]; new_ee = new_elem_entities[i_s]; break; }
+            }
+            if (new_pg == -1 || new_ee == -1) { out_file << line << "\n"; continue; }
+            */
+
+            // Get the mesh element type. Verify it is '2' for 'boundary element'
+            size_t elemType_pos = first_space + 1;
+            size_t second_space = line.find(' ', elemType_pos);
+            string elemType_str = line.substr(elemType_pos, second_space - elemType_pos);
+            int elemType = stoi( elemType_str );
+            assert (elemType == 2);
+
+            // Get the number of tags. Verify there are 2: the physical group and the element entity tags
+            size_t N_tags_pos = second_space + 1;
+            size_t third_space = line.find(' ', N_tags_pos);
+            string N_tags_str = line.substr(N_tags_pos, third_space - N_tags_pos);
+            int N_tags = stoi( N_tags_str );
+            assert (N_tags == 2);
+
+            // Pass the physical group and element entity tags; we will write the new ones to the new .msh file
+            size_t elemPG_pos = third_space + 1;
+            size_t fourth_space = line.find(' ', elemPG_pos);
+            size_t entityTag_pos = fourth_space + 1;
+            size_t fifth_space = line.find(' ', entityTag_pos);
+
+            // Get the element node tags
+            size_t nodeTag1_pos = fifth_space + 1;
+            size_t sixth_space = line.find(' ', nodeTag1_pos);
+            size_t nodeTag2_pos = sixth_space + 1;
+            size_t seventh_space = line.find(' ', nodeTag2_pos);
+            size_t nodeTag3_pos = seventh_space + 1;
+            size_t end_line = line.find('\n', nodeTag3_pos);
+            string nodeTag1 = line.substr(nodeTag1_pos, sixth_space - nodeTag1_pos);
+            string nodeTag2 = line.substr(nodeTag2_pos, seventh_space - nodeTag2_pos);
+            string nodeTag3 = line.substr(nodeTag3_pos, end_line - nodeTag3_pos);
+
+            // Alter the line
+            lines[i_line] = mshElemTag_str + " " + elemType_str + " " + N_tags_str + " " + to_string(new_pg) + " " + to_string(new_ee) + " " + nodeTag1 + " " + nodeTag2 + " " + nodeTag3;
+            continue;
+        }
+    }
+
+    cout << FILE_NAME << ": " << FUNCTION_NAME << ":    Complete!" << endl;
+
+
+    cout << FILE_NAME << ": " << FUNCTION_NAME << ": Writing output .msh file..." << endl;
+
+    // Create the output file stream
+    ofstream out_file(new_msh_file_path);
+    if(!out_file.is_open()) { cerr << FILE_NAME << ": " << FUNCTION_NAME << ": CRITICAL ERROR: Error creating .msh file for saving tages STL mesh. File path is: " << new_msh_file_path << endl; exit(1); }
+
+    // Write the lines
+    for (const auto& l : lines) { out_file << l << "\n"; }
+
+    // Close the new .msh file
+    out_file.close();
+
+    cout << FILE_NAME << ": " << FUNCTION_NAME << ":    Complete!" << endl;
+}
+
+
 
 
 
@@ -1945,9 +2360,9 @@ std::vector<std::pair<int, int>> importAndCutSTLVolume(const string &STL_file_pa
     int ln_gID;
     for (int i_ln = 0; i_ln < ln_pt_surf_pairs2.size(); i_ln++) {
         cout << "\r    Considering line  i_ln = " << i_ln << "/" << ln_pt_surf_pairs2.size() - 1 << "." << std::flush;
-
+        
         // Create the line
-        ln_gID = gmsh::model::occ::addLine(std::get<0>(ln_pt_surf_pairs2[i_ln])[0], std::get<0>(ln_pt_surf_pairs2[i_ln])[1]);            
+        ln_gID = gmsh::model::occ::addLine(std::get<0>(ln_pt_surf_pairs2[i_ln])[0], std::get<0>(ln_pt_surf_pairs2[i_ln])[1]);
         // Initiate gln_surf_pairs if i_ln = 0
         if (i_ln == 0) { gln_surf_pairs.SetMinInd(ln_gID); gln_gsurf_pairs.SetMinInd(ln_gID); }
         // Add the surface indices entry to gln_surf_pairs for the corresponding gline

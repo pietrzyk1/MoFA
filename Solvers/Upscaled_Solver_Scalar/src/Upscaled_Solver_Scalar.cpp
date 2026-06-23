@@ -48,8 +48,8 @@ public:
     void AlterGammaVec(const vector<int> &AR_tags, const vector<vector<int>> &AR_neighbors, int active_AR_global, int procedureID = -1);
     static constexpr vector<double>* GetParamVec(const char* param_name) { return nullptr; };
     bool LoadParamDicts(JSONDict &eq_dict);
-    void ImplementGeneralizedResidual(vector<double> &temp, vector<string> keys, int N_AR, bool isKMat = false);
-    void ImplementGeneralizedResidual(vector<double> &temp, vector<int> &AR_inds, vector<string> keys, bool isKMat = false);
+    void ImplementGeneralizedResidual(vector<double> &temp, vector<string> keys, int N_AR, bool isKMat = false) {};
+    void ImplementGeneralizedResidual(vector<double> &temp, vector<int> &AR_inds, vector<string> keys, bool isKMat = false) {};
     void CreateTransform(JSONDict &closure_residuals_dict, vector<double> &porosities, int N_AR, double epsilon, double omega);
     void CreateTransformSpMat(JSONDict &closure_residuals_dict, vector<double> &porosities, int N_AR, double epsilon, double omega);
     void ModifyTransform(vector<double> &temp, vector<int> &AR_inds, vector<string> keys, bool addOne = false);
@@ -399,7 +399,7 @@ int main(int argc, char *argv[])
         // If generalized-residual parameters were found in eq_dict by gen_res_manager, appy them to temp
         if (useGenResForm) { gen_res_manager.ImplementGeneralizedResidual(temp, AR_inds, {comp_key, i_AR_str}, false); }
         // Divide by the porosity (to potentially make the averages "superficial averages")
-        for (int j_AR = 0; j_AR < AR_inds.size(); j_AR++) { temp[j_AR] *= 1/porosities[i_AR]; }      // DIVIDE BY XI HERE %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+        for (int j_AR = 0; j_AR < AR_inds.size(); j_AR++) { temp[j_AR] *= 1/porosities[i_AR] / globalVars.BC_frequency_scale; }      // DIVIDE BY XI HERE %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
         // Add the temp vector to the M matrix
         for (int i = 0; i < AR_inds.size(); i++) { M.Add(AR_inds[i], i_AR, temp[i]); }
     }
@@ -435,7 +435,7 @@ int main(int argc, char *argv[])
         if (useGenResForm) { gen_res_manager.ImplementGeneralizedResidual(temp, AR_inds, {comp_key, "0"}, false); }
         
         // Assign the temp vector to the Mf vector
-        for (int i = 0; i < AR_inds.size(); i++) { Mf[AR_inds[i]] = temp[i]; }          // DIVIDE BY XI HERE %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+        for (int i = 0; i < AR_inds.size(); i++) { Mf[AR_inds[i]] = temp[i] / globalVars.BC_frequency_scale; }          // DIVIDE BY XI HERE %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     }
 
 
@@ -647,12 +647,15 @@ void inlet_BC_func_T(const double &t, double &F)
     if (inlet_function_type == "sinusoidal") {
         // For a sinusoidal input
         double a1 = 0.5;
-        double b1 = a1 * M_PI * globalVars.epsilon * globalVars.epsilon * globalVars.BC_frequency_scale;// * 0.75;
+        double b1 = a1 * M_PI * globalVars.epsilon * globalVars.epsilon;// * globalVars.BC_frequency_scale;
+        //double b1 = globalVars.epsilon * globalVars.epsilon;// * globalVars.BC_frequency_scale;
         F = a1 - a1 * cos(t * M_PI / b1);
+        //F = a1 - 0.375 * cos(t * M_PI / (b1*2.5)) - 0.125 * cos(t * M_PI / (b1*1.3));
     }
     else if (inlet_function_type == "exponential") {
         // For a exponential input
-        F = 1 - exp(-t / (globalVars.epsilon * globalVars.epsilon * globalVars.BC_frequency_scale));
+        // F = 1 - exp(-t / (globalVars.epsilon * globalVars.epsilon * globalVars.BC_frequency_scale));
+        F = 1 - exp(-t / (globalVars.epsilon * globalVars.epsilon));
     }
     else {
         cerr << globalVars.FILENAME << ": CRITICAL ERROR: Unrecognized inlet function." << endl;

@@ -52,6 +52,7 @@ public:
     constexpr void ImplementGamma(SparseMatrix &BM_avgavg, const vector<int> &AR_inds_loc2glob) {};
     void AlterGammaVec(const vector<int> &AR_tags, const vector<vector<int>> &AR_neighbors, int active_AR_global, int procedureID = -1);
     static constexpr vector<double>* GetParamVec(const char* param_name) { return nullptr; };
+    bool GetIsSparseCoefVecs() { return true; }
     bool LoadParamDicts(JSONDict &eq_dict);
     void ImplementGeneralizedResidual(vector<double> &temp, vector<string> keys, int N_AR, bool isKMat = false);
     void CreateTransform(JSONDict &closure_residuals_dict, vector<double> &porosities, int N_AR, double epsilon, double omega);

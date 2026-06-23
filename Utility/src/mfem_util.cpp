@@ -1490,8 +1490,8 @@ void LinearTimeDependentOperator::PrepareImplicitEuler(string solver_type, strin
     int maxIter(8000);
     //real_t rtol(1.0e-7);
     //real_t atol(1.0e-9);
-    real_t rtol(1.0e-4);
-    real_t atol(1.0e-6);
+    real_t rtol(1.0e-8);
+    real_t atol(1.0e-10);
     
     // Create F = M + A dt  (i.e., the inverted matrix)
     F = Add(1.0, M, dt, A);
@@ -2632,8 +2632,8 @@ void GridFunctionManager::UseLocalGridFunction()
         int maxIter(8000);
         //real_t rtol(1.0e-7);
         //real_t atol(1.0e-9);
-        real_t rtol(1.0e-5);
-        real_t atol(1.0e-7);
+        real_t rtol(1.0e-7);
+        real_t atol(1.0e-9);
         
         // Create F = M + A dt  (i.e., the inverted matrix)
         F = Add(1.0, M, dt, A);

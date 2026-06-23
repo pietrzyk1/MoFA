@@ -100,6 +100,17 @@ void getTriPointsFromSTL(const string &STL_file_path, const double &geo_scale,
 //      surf_normals: a vector of the normal vectors for each STL surface
 //      tri_count: the number of triangles/surfaces defined in the STL
 
+void getTrianglesFromSTL(const string &STL_file_path, const double &geo_scale,
+    std::vector<std::vector<std::vector<double>>> &tri_coords,
+    std::vector<std::vector<double>> &tri_normals, int &tri_count, std::vector<double> &min_max_x_y_z);
+// Here:
+//      STL_file_path: the file path to an STL file
+//      geo_scale: the scale with which to scale the loaded/imported geometry
+//      tri_coords: a vector of triangles described by another vector of their point coordinates
+//      tri_normals: a vector of the normal vectors for each STL triangle surface
+//      tri_count: the number of triangles/surfaces defined in the STL
+//      min_max_x_y_z: the minimum and maximum x y and z coordinate values
+
 void getCoordFromSTLLine(const string &line, std::vector<double> &coord, const double &scale, const int pos = 0);
 // Here:
 //      line: a line (string) from an STL file
@@ -127,6 +138,30 @@ int createCutVolumeFromSTL(const string &STL_file_path, const double &geo_scale)
 // ========================================
 // Function for importing STL geometry in gmsh (primarily for homogenization closure problem simulations)
 // ========================================
+
+std::vector<std::pair<int, int>> splitRectangularSTL(const string &STL_file_dir, const string &STL_file_name, const double &geo_scale);
+// Here:
+//      STL_file_dir: the file directory to the STL file for mesh creation
+//      STL_file_name: the STL file name for mesh creation
+//      geo_scale: the scale with which to scale the loaded/imported geometry
+
+void writeSTLFile(const string &STL_file_path, const std::vector<std::vector<std::vector<double>>> tri_coords,
+    std::vector<std::vector<double>> tri_normals);
+// Here:
+//      STL_file_path: the file path to the STL file to be written
+//      tri_coords: a nested vector with the structure: { triangles { points {x,y,z coords} } }
+//      tri_normals: a nested vector with the normal vectors of each triangle
+
+
+void changeElementTags(const string msh_file_path, const string new_msh_file_path,
+    const std::vector<std::vector<size_t>> &elemTags_split, const std::vector<int> &new_pgs,
+    const std::vector<int> &new_elem_entities);
+// Here:
+//      msh_file_path: the file path to the STL mesh file to be editted
+//      new_msh_file_path: the file path to the new/editted STL mesh file
+//      elemTags_split: a nested vector of the element tags grouped by those belonging to the same physical group
+//      new_pgs: the new physical group tags
+//      new_elem_entities: the new element entity tags
 
 std::vector<std::pair<int, int>> importSTLVolume(const string &STL_file_path, const double &geo_scale);
 // Here:

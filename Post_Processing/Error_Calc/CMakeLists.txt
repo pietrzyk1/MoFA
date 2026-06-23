@@ -1,4 +1,4 @@
-#lL.lH.
+# lL.lH.
 #
 # Copyright (c) 2025, Lawrence Livermore National Security, LLC
 # and other MoFA project developers. All Rights reserved.
@@ -9,7 +9,7 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 #
-#lL.lH.
+# lL.lH.
 
 # Include the path configuration cmake file for the various source directory paths
 include(${CMAKE_SOURCE_DIR}/../../cmake/Configuration_Paths.cmake)
@@ -28,5 +28,51 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${PROJECT_SOURCE_DIR}/bin)
 include_directories(${UTILITY_SOURCE_DIR}/include)
 
 
-# Add the executable we want to build. The first argument will be the name of the produced executable..
-add_executable(error_calc ${PROJECT_SOURCE_DIR}/src/Error_Calc.cpp ${UTILITY_SOURCE_DIR}/src/JSON_IO.cpp)
+################
+# Serial build #
+################
+
+# If BUILD_FOR_SERIAL is 'ON' (check cmake/Configuration_Paths.cmake), then build the solver assuming the serial build of MFEM.
+if(BUILD_FOR_SERIAL)
+
+    # Add the executable we want to build. The first argument will be the name of the produced executable..
+    add_executable(error_calc ${PROJECT_SOURCE_DIR}/src/Error_Calc.cpp ${UTILITY_SOURCE_DIR}/src/JSON_IO.cpp ${UTILITY_SOURCE_DIR}/src/mfem_util.cpp)
+
+    # Tell CMake any directories containing the project's library files (i.e., the .a, .so, or .lib files). This is often the ./lib directories.
+    target_link_directories(error_calc PRIVATE ${MFEM_SOURCE_DIR})
+
+    # Tell CMake any directories containing the project's header files (i.e., the .h files). This is often the ./include directories.
+    target_include_directories(error_calc PRIVATE ${MFEM_SOURCE_DIR})
+
+    # Tell CMake any libraries to link to the project's executable. If you told CMake the directories containing the project's libraries in "link_directories", you can simply put the library names in the second argument. Otherwise, put the full path to the library file (i.e., the .a, .so, or .lib file) in the second argument.
+    target_link_libraries(error_calc PRIVATE libmfem.a)
+
+endif()
+
+
+######################
+# MPI-Parallel build #
+######################
+
+# If BUILD_FOR_PARALLEL is ON, and an MPI library can be found, create an executable that uses the MPI-parallel build of MFEM with the path to the MPI-parallel build of MFEM provided in cmake/Configuration_Paths.cmake.
+if(BUILD_FOR_PARALLEL)
+    find_package(MPI) # Find the MPI library, and only build if it is found
+    if(MPI_CXX_FOUND)
+        # Add the executable for the parallel implementation.
+        add_executable(error_calc_p ${PROJECT_SOURCE_DIR}/src/Error_Calc.cpp ${UTILITY_SOURCE_DIR}/src/JSON_IO.cpp ${UTILITY_SOURCE_DIR}/src/mfem_util.cpp)
+
+        # Tell CMake any directories containing the project's library files (i.e., the .a, .so, or .lib files). This is often the ./lib directories.
+        target_link_directories(error_calc_p PRIVATE ${PAR_MFEM_SOURCE_DIR} ${HYPRE_LIB_DIR} ${METIS_LIB_DIR})
+        
+        # Tell CMake any directories containing the project's header files (i.e., the .h files). This is often the ./include directories.
+        target_include_directories(error_calc_p PRIVATE ${PAR_MFEM_SOURCE_DIR} ${HYPRE_INCLUDE_DIR} ${METIS_INCLUDE_DIR})
+        
+        # Define MPI_BUILD, which can be used to trigger MPI_BUILD tasks/functions/classes in the executable
+        target_compile_definitions(error_calc_p PRIVATE MPI_BUILD)
+
+        # Tell CMake any libraries to link to the project's executable (this includes the link to the MPI library). If you told CMake the directories containing the project's libraries in "link_directories", you can simply put the library names in the second argument. Otherwise, put the full path to the library file (i.e., the .a, .so, or .lib file) in the second argument.
+        target_link_libraries(error_calc_p PRIVATE MPI::MPI_CXX libmfem.a libHYPRE.a libmetis.a)
+    else()
+        message(WARNING "MPI not found: parallel executable will not be created.")
+    endif()
+endif()

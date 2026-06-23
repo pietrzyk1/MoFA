@@ -20,10 +20,10 @@ def main():
     # Provide the SVG directory and file name
     #geometry_dir = '../../../Meshes/data/Single_Cylinder/11x1_D0p5/'
     #geometry_dir = '../../../Meshes/data/Sintered_Iron_2D_Periodic_UnitCell/'
-    geometry_dir = '../../../Meshes/data/Sand_Stone_1/'
+    geometry_dir = '../../../Meshes/data/Sand_Stone_2/'
     #geometry_file_name_prefix = 'Single_Cylinder'
     #geometry_file_name_prefix = 'Sintered_Iron_2D_Periodic_UnitCell'
-    geometry_file_name_prefix = 'Sand_Stone_1'
+    geometry_file_name_prefix = 'Sand_Stone_2'
     geometry_file_name_suffix = '.svg'
 
     # Provide the save file directory and file name

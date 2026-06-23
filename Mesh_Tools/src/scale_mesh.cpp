@@ -189,7 +189,7 @@ int main(int argc, char **argv)
     // ========================================
     // Save the mesh
     // ========================================
-    cout << "scale_mesh.cpp: Saving mesh..." << endl;
+    cout << globalVars.FILENAME << ": Saving mesh..." << endl;
     
     gmsh::option::setNumber("Mesh.MshFileVersion", 2.2); // Make the saved version 2.2 so that it is MFEM compatible
     gmsh::write(scaled_mesh_file_path); // Save mesh with defined name
@@ -199,7 +199,7 @@ int main(int argc, char **argv)
     // ========================================
     //   Create and save the scaled mesh information
     // ========================================
-    cout << "scale_mesh.cpp: Preparing mesh info file..." << endl;
+    cout << globalVars.FILENAME << ": Preparing mesh info file..." << endl;
 
     // Load the mesh information
     JSONDict mesh_info; mesh_info.loadFromFile(orig_mesh_info_file_path);

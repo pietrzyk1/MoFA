@@ -87,7 +87,8 @@ int main(int argc, char *argv[])
     string output_file_name_suffix = ".gf";
     
     string average_output_dir = "./";
-    string average_output_file_name = "avg_sol.txt";
+    string average_output_file_name_prefix = "avg_sol";
+    string average_output_file_name_suffix = ".txt";
     vector<string> average_solution_keys = {"avg_c"};
     
     string mesh_output_dir = "./";
@@ -162,7 +163,8 @@ int main(int argc, char *argv[])
 
         sub_dict = *porescale_dict["average output path"];
         sub_dict.getValue("directory", average_output_dir);
-        sub_dict.getValue("file name", average_output_file_name);
+        sub_dict.getValue("file name prefix", average_output_file_name_prefix);
+        sub_dict.getValue("file name suffix", average_output_file_name_suffix);
         
         sub_dict = *porescale_dict["mesh output path"];
         sub_dict.getValue("directory", mesh_output_dir);
@@ -362,7 +364,7 @@ int main(int argc, char *argv[])
     // ===============================================================
     // Initiate the bilinear form of the mass matrix
     BilinearForm *varf_mass(new BilinearForm(fespace_c));
-    ConstantCoefficient dimlessTimeScale(omega);
+    ConstantCoefficient dimlessTimeScale(omega / globalVars.BC_frequency_scale);
     varf_mass->AddDomainIntegrator(new MassIntegrator(dimlessTimeScale));
     varf_mass->Assemble();
     // varf_cdiff->EliminateEssentialBC(marker_inlet_BC, Operator::DIAG_ONE); // This might need to be here
@@ -494,7 +496,7 @@ int main(int argc, char *argv[])
     else { other_dict["average_type"] = "intrinsic"; }
     avg_sol_struct["other"] = &other_dict;
     
-    avg_sol_struct.saveToFile(average_output_dir + average_output_file_name);
+    avg_sol_struct.saveToFile(average_output_dir + average_output_file_name_prefix + average_output_file_name_suffix);
 
     
     // Save the AR pore areas back to the mesh info file
@@ -533,8 +535,10 @@ void inlet_BC_func_T(const double &t, double &F)
     if (inlet_function_type == "sinusoidal") {
         // For a sinusoidal input
         double a1 = 0.5;
-        double b1 = a1 * M_PI * globalVars.epsilon * globalVars.epsilon * globalVars.BC_frequency_scale; // chosen to oscillate according to the maximum allowable amount (\epsilon^{-2})
+        double b1 = a1 * M_PI * globalVars.epsilon * globalVars.epsilon; // chosen to oscillate according to the maximum allowable amount (\epsilon^{-2})
+        //double b1 = globalVars.epsilon * globalVars.epsilon; // chosen to oscillate according to the maximum allowable amount (\epsilon^{-2})
         F = a1 - a1 * cos(t * M_PI / b1);
+        //F = a1 - 0.375 * cos(t * M_PI / (b1*2.5)) - 0.125 * cos(t * M_PI / (b1*1.3));
     }
     else if (inlet_function_type == "exponential") {
         // For a exponential input

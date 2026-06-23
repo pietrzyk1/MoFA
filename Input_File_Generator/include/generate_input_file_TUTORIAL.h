@@ -45,6 +45,11 @@ void createTutorialUpscaledConfig(string &project_dir, string &config_file_name)
     meshDict_output["directory"] = project_dir + "mesh/"; // The mesh output directory 
     meshDict_output["file name"] = "upscaled_mesh.msh"; // The mesh file name
     meshDict["output path"] = &meshDict_output;
+    
+    JSONDict meshDict_output_geo;
+    meshDict_output_geo["directory"] = project_dir + "mesh/"; // The output geometry directory 
+    meshDict_output_geo["file name"] = "upscaled_mesh.geo_unrolled"; // The output geometry file name
+    meshDict["output geo path"] = &meshDict_output_geo;
 
     JSONDict meshDict_info;
     meshDict_info["directory"] = meshDict_output["directory"]; // The mesh info output directory
@@ -285,6 +290,11 @@ void createTutorialPorescaleConfig(string &project_dir, string &config_file_name
     meshDict_output["directory"] = project_dir + "mesh/"; // The mesh output directory 
     meshDict_output["file name"] = "porescale_mesh.msh"; // The mesh file name
     meshDict["output path"] = &meshDict_output;
+
+    JSONDict meshDict_output_geo;
+    meshDict_output_geo["directory"] = project_dir + "mesh/"; // The output geometry directory 
+    meshDict_output_geo["file name"] = "porescale_mesh.geo_unrolled"; // The output geometry file name
+    meshDict["output geo path"] = &meshDict_output_geo;
 
     JSONDict meshDict_info;
     meshDict_info["directory"] = meshDict_output["directory"]; //project_dir + "mesh/"; // The mesh info output directory

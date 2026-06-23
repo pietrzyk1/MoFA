@@ -60,11 +60,17 @@ int main(int argc, char *argv[])
     string output_file_name_suffix = ".gf";
     
     string average_output_dir = "./";
-    string average_output_file_name = "avg_sol.txt";
+    string average_output_file_name_prefix = "c_avg_";
+    string average_output_file_name_suffix = ".gf";
+    string average_mesh_file_name = "avg_porescale_mesh.mesh";
     vector<string> average_solution_keys = {"avg_c"};
     
     string mesh_output_dir = "./";
     string mesh_output_file_name = "mesh.mesh";
+
+    int print_avg_contour = 1;
+    int N_AR_x;
+    int N_AR_y;
 
 
     // ===============================================================
@@ -94,6 +100,11 @@ int main(int argc, char *argv[])
         sub_dict.getValue("directory", mesh_info_dir);
         sub_dict.getValue("file name", mesh_info_file_name);
         
+        sub_dict = *mesh_dict["AR"];
+        JSONDict subsub_dict = *sub_dict["N_AR"];
+        subsub_dict.getValue("x", N_AR_x);
+        subsub_dict.getValue("y", N_AR_y);
+        
 
         JSONDict porescale_dict = *configData["scalar porescale"];
         
@@ -110,7 +121,10 @@ int main(int argc, char *argv[])
 
         sub_dict = *porescale_dict["average output path"];
         sub_dict.getValue("directory", average_output_dir);
-        sub_dict.getValue("file name", average_output_file_name);
+        //sub_dict.getValue("file name", average_output_file_name);
+        sub_dict.getValue("file name prefix", average_output_file_name_prefix);
+        sub_dict.getValue("file name suffix", average_output_file_name_suffix);
+        sub_dict.getValue("avg mesh file name", average_mesh_file_name);
         
         sub_dict = *porescale_dict["mesh output path"];
         sub_dict.getValue("directory", mesh_output_dir);
@@ -125,6 +139,7 @@ int main(int argc, char *argv[])
     // Initialize paths and file names from the parts taken from the defaults (either in the variable declarations or the config file)
     string mesh_file_path = mesh_output_dir + mesh_output_file_name; // + ".serial";
     string mesh_info_file_path = mesh_info_dir + mesh_info_file_name;
+    string average_mesh_file_path = average_output_dir + average_mesh_file_name;
     
     
     // ===============================================================
@@ -169,6 +184,29 @@ int main(int argc, char *argv[])
     // Finite element space for concentration
     FiniteElementCollection *fec_c = new H1_FECollection(order, mesh->Dimension());
     FiniteElementSpace *fespace_c = new FiniteElementSpace(mesh, fec_c, 1);
+    
+    
+    // Create a mesh, function space, and gridfunction for plotting the average pore-scale solution.
+    std::unique_ptr<Mesh> mesh_avg;
+    std::unique_ptr<FiniteElementCollection> fec_c_avg;
+    std::unique_ptr<FiniteElementSpace> fespace_c_avg;
+    std::unique_ptr<GridFunction> avg_sol_GF;
+    if (print_avg_contour == 1)
+    {
+        // Create a superficial mesh (i.e., mesh of ARs), a function space for that mesh, and a gridfunction on
+        // that mesh in case the averaging area type calls for it. If the averaging area type is "AR", it means
+        // the superficial average (i.e., average over the AR, not the pore-space) will be used. If it is "pore",
+        // then the pore-space average will be used
+        if (avg_area_type == "AR") { mesh_avg = std::make_unique<Mesh>(Mesh::MakeCartesian2D(N_AR_x, N_AR_y, Element::Type::QUADRILATERAL, false, N_AR_x, N_AR_y)); }
+        else { mesh_avg = std::make_unique<Mesh>(mesh_file_path); } // Use the provided mesh file to define the mesh
+        
+        // Create the finite element space for concentration (this is for plotting the average in the AR or pore space depending on the porosities avaiable)
+        fec_c_avg = std::make_unique<DG_FECollection>(1, mesh_avg->Dimension());
+        fespace_c_avg = std::make_unique<FiniteElementSpace>(mesh_avg.get(), fec_c_avg.get(), 1);
+        
+        // Define a grid function for plotting the average concentration within the AR or pore space depending on the porosities avaiable)
+        avg_sol_GF = std::make_unique<GridFunction>(fespace_c_avg.get());
+    }
 
     cout << "Complete." << endl;
 
@@ -259,6 +297,12 @@ int main(int argc, char *argv[])
             if (std::abs(sol_avg.Elem(i)) <= 1.0E-300) { avg_sol[i].push_back( 0.0 ); }
             else { avg_sol[i].push_back(sol_avg.Elem(i)); }
         }
+
+        // Print the average solution on an "AR mesh"
+        if (print_avg_contour == 1) {
+            CreateAvgSolGridFunction(sol_avg, *avg_sol_GF, avg_area_type, AR_tags);
+            avg_sol_GF->Save((average_output_dir + average_output_file_name_prefix + to_string(i_sol) + average_output_file_name_suffix).c_str());
+        }
     }
 
     // Print the final average solutions (for debugging purposes...)
@@ -269,6 +313,9 @@ int main(int argc, char *argv[])
     // ===============================================================
     //   Save the solutions and mesh.
     // ===============================================================
+    // Save the mesh
+    if (print_avg_contour == 1) { mesh_avg->Save(average_mesh_file_path); }
+
     // Save the average solutions to the structure, and then the structure to a text file
     JSONDict avg_sol_struct, avg_c_struct, box_data, other_dict;
     for (int i = 0; i < avg_sol.size(); i++) { box_data[to_string(i)] = avg_sol[i]; }
@@ -283,7 +330,7 @@ int main(int argc, char *argv[])
     else { other_dict["average_type"] = "intrinsic"; }
     avg_sol_struct["other"] = &other_dict;
     
-    avg_sol_struct.saveToFile(average_output_dir + average_output_file_name);
+    avg_sol_struct.saveToFile(average_output_dir + average_output_file_name_prefix + ".txt");
     
 
     // ===============================================================

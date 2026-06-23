@@ -1,4 +1,4 @@
-#lL.lH.
+# lL.lH.
 #
 # Copyright (c) 2025, Lawrence Livermore National Security, LLC
 # and other MoFA project developers. All Rights reserved.
@@ -9,7 +9,7 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 #
-#lL.lH.
+# lL.lH.
 
 import sys
 import os

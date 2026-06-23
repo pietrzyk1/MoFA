@@ -131,6 +131,9 @@ Mesh_Tools/bin/*
 Mesh_Tools/build/*
 !Mesh_Tools/build/.gitkeep
 
+# The STL mesh creator
+Mesh_Tools/src/generate_STL_mesh.cpp
+
 # Post Processing: Error Calc
 Post_Processing/Error_Calc/bin/*
 !Post_Processing/Error_Calc/bin/.gitkeep

@@ -66,3 +66,17 @@ add_executable(juxtapose_unitcell ${PROJECT_SOURCE_DIR}/src/juxtapose_unitcell.c
 
 # Now we actually link the libraries to the executable
 target_link_libraries(juxtapose_unitcell libgmsh.so)
+
+
+#######################################
+# Make the light-weight generate mesh from STL executable
+#######################################
+if(EXISTS ${PROJECT_SOURCE_DIR}/src/generate_STL_mesh.cpp)
+
+    # Add the executable we want to build. The first argument will be the name of the produced executable.
+    add_executable(generate_STL_mesh ${PROJECT_SOURCE_DIR}/src/generate_STL_mesh.cpp ${UTILITY_SOURCE_DIR}/src/JSON_IO.cpp ${MESH_TOOLS_SOURCE_DIR}/src/gmsh_utils.cpp ${MESH_TOOLS_SOURCE_DIR}/src/gmsh_import_STL.cpp)
+
+    # Tell CMake any libraries to link to the project's executable. If you told CMake the directories containing the project's libraries in "link_directories", you can simply put the library names in the second argument. Otherwise, put the full path to the library file (i.e., the .a, .so, or .lib file) in the second argument.
+    target_link_libraries(generate_STL_mesh libgmsh.so)
+
+endif()

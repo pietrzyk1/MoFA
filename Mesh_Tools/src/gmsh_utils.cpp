@@ -55,10 +55,9 @@ std::vector<std::vector<std::vector<double>>> getSurfaceCoords(int srfc_tag)
     std::vector<std::vector<std::vector<double>>> srfc_ln_pts_coords;
     std::vector<std::pair<int, int>> lns_dimtag;
 
-    gmsh::model::getBoundary({{2, srfc_tag}}, lns_dimtag, false, false, false);          
-
-    for (int i_ln = 0; i_ln < lns_dimtag.size(); i_ln++)
-    {
+    gmsh::model::getBoundary({{2, srfc_tag}}, lns_dimtag, false, false, false);
+    
+    for (int i_ln = 0; i_ln < lns_dimtag.size(); i_ln++) {
         srfc_ln_pts_coords.push_back( getLineCoords(lns_dimtag[i_ln].second) );
     }
 
@@ -397,9 +396,10 @@ bool isCoincides(const int ln_tag, const int dim, const double test_val, const d
 // Define a function that takes in a surface tag, a spatial dimensions (that is parallel with the surface normal), and a coordinate (in that spatial dimension), and determines if the surface tag coincides with the surface perpendicular to the specified dimension at the given coordinate
 bool isCoincidesSurface(const int srfc_tag, const int dim, const double test_val, const double tol)
 {
-    // Get the coordinates of the corner points of the provided surface
+    // Get the coordinates of the corner points of the provided surface and make sure there are at least 3 points in the surface
     std::vector<std::vector<std::vector<double>>> srfc_geo = getSurfaceCoords(srfc_tag);
-    
+    assert (srfc_geo.size() >= 3);
+
     // Create a dummy vector to see if the normal of the provided surface is parallel to it
     std::vector<double> helper_vec;
     helper_vec = {0.0, 0.0, 0.0};
@@ -410,10 +410,8 @@ bool isCoincidesSurface(const int srfc_tag, const int dim, const double test_val
     if (!isParallel) { return false; }
     
     // Determine if the given line intersects the dummy line
-    for (size_t i = 0; i < srfc_geo.size(); i++)
-    {
-        if ( !compareValues(srfc_geo[i][0][dim], test_val, tol) || !compareValues(srfc_geo[i][1][dim], test_val, tol) )
-        {
+    for (size_t i = 0; i < srfc_geo.size(); i++) {
+        if ( !compareValues(srfc_geo[i][0][dim], test_val, tol) || !compareValues(srfc_geo[i][1][dim], test_val, tol) ) {
             return false;
         }
     }

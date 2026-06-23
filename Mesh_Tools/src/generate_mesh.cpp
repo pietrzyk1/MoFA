@@ -309,8 +309,8 @@ int main(int argc, char **argv)
                 //             {-0.5, -0.4, -0.3, -0.2, -0.1, 0.0, 0.1, 0.2, 0.3, 0.4, 0.5},
                 //             {-0.5, -0.4, -0.3, -0.2, -0.1, 0.0, 0.1, 0.2, 0.3, 0.4, 0.5}};
                 
-                //ARs = importSTLVolume(geometry_file_path, geo_scale);
-                ARs = importAndCutSTLVolume(geometry_file_path, geo_scale, AR_planes);
+                ARs = importSTLVolume(geometry_file_path, geo_scale);
+                //ARs = importAndCutSTLVolume(geometry_file_path, geo_scale, AR_planes);
                 //gmsh::write("my_model.geo_unrolled"); // For debugging. Writes a (dense/heavy) file of the current gmsh model geometry
             }
             else
@@ -974,22 +974,6 @@ int main(int argc, char **argv)
             homogenization_dict["back"] = back_tag;
         }
         bdr_tag_file_new["homogenization"] = &homogenization_dict;
-    }
-    else if (simulation_type == "MoFA new format")
-    {
-        // Create the Stokes sub-dictionary (containing tags for BCs in the Stokes problem)
-        //stokes_dict["inlet1"] = inlet_tag_set;
-        //stokes_dict["inlet1 AR neighbors"] = inlet_AR_neighbors;
-        //stokes_dict["noslip1"] = no_slip_tag_set;
-        //bdr_tag_file_new["stokes"] = &stokes_dict;
-
-
-        // Create the scalar closure sub-dictionary (containing tags for BCs in the scalar closure problem)
-        //transport_dict["inlet1"] = inlet_tag_set;
-        //transport_dict["inlet1 AR neighbors"] = inlet_AR_neighbors;
-        //transport_dict["outlet1"] = outlet_tag_set;
-        //transport_dict["outlet1 AR neighbors"] = outlet_AR_neighbors;
-        //bdr_tag_file_new["scalar_closure"] = &transport_dict;
     }
     else
     {
