@@ -251,3 +251,4 @@ MoFA is distributed under the terms of the BSD-3 license. All new contributions 
 
 LLNL Release Number:   LLNL-CODE-2006961
 
+[![DOI](https://shields.io)](https://doi.org) [![License](https://shields.io)](https://opensource.org)
